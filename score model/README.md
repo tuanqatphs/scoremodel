@@ -1,16 +1,3 @@
-<!-- README.md is generated from README.Rmd. Please edit that file -->
-
-The goalmodel package let you build prediction models for the number of
-goals scored in sport games. The models are primarily aimed at modelling
-and predicting football (soccer) scores, but could also be applicable
-for similar sports, such as hockey and handball.
-
-If you find this package useful, please consider supporting the
-development at <https://ko-fi.com/opisthokonta>
-
-[![ko-fi banner and
-link](README_files/SupportMe_red@2x_scaled.png)](https://ko-fi.com/opisthokonta)
-
 # Installation
 
 ``` r
