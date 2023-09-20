@@ -1,3 +1,5 @@
+https://docs.google.com/spreadsheets/d/1iGxxNOR72BxMrxCHN2UP4WXt9OCM39xnV5vmPHiXGRs/edit#gid=1889509748
+
 Version 0.6.2 (development version)
 Can now fit a hurdle model (See A. Owen (2017) The Application of Hurdle Models to Accurately Model 0-0 Draws in Predictive Models of Football Match Outcomes), but prediction methods are not yet implemented.
 Small bugfixes in the score_predictions function.
