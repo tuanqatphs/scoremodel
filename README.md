@@ -566,19 +566,29 @@ predict_expg(gm_res_dc, team1=to_predict1, team2=to_predict2, return_df = TRUE)
 Other packages
 There are some other packages out there that have similar functionality as this package. The regista package implements a more general interface to fit the Dixon-Coles model. The fbRanks package implements only the Dixon-Coles time weighting functionality, but has a lot of other features. In footBayes you can fit models with Bayesian procedures. The package includes several models, including bivariate Poisson models and models with time-varying attack and defense parameters.
 
-I'm trying to break down your code into snaller pieces for a better understanding but I can't get it at some points
-1/ About making the dummy attack and defence matrix
+Hi,
 
-As I understand, we need to create a matrix including the coefficients for the parameters intercept, home field advantage and 40 attack and defence paramters for 20 teams. So I thought that the xmat matrix shape was (760, 42)? Also, when you solve out the math, why you subtract one more column?
+Firstly, thank you for making your work public, I found your package a few weeks ago and it is awesome to be honest.
+
+I'm trying to break down your code into smaller pieces for a better understanding but I can't get it at some points. Could you explain to me when you have time?
+
+1/ About making the dummy attack and defence matrix
+ (the goalmodel_fit.R file)
+As I understand, we need to create a matrix including the coefficients for the parameters intercept, home field advantage and 40 attack and defence paramters for 20 teams. So I thought that the xmat matrix shape was (760, 42)? (line 355)
+Also, when you solve out the math, why you subtract one more column? (line 412)
+(I tried modifying the code and got errors)
 
 2/ The constraints
 
 Can you explain what these lines of code do?
 # Sum-to-zero constraint for the first team.
-xmata[team1_stacked == all_teams[1]] = -1
+xmata[team1_stacked == all_teams[1]] = -1 (line 373)
 xmatd[team2_stacked == all_teams[1]] = -1
 
 I notice that the sum of attack abilities sum up to 0 but the sum of defence abilities doesn't. I'm not sure if the above lines of code are related.
 
-3/ 
+3/ This is not a question, they are just ideas that I want to share to you
 
+
+
+Thanks! I really appreciate your time.
