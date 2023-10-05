@@ -568,27 +568,60 @@ There are some other packages out there that have similar functionality as this 
 
 Hi,
 
-Firstly, thank you for making your work public, I found your package a few weeks ago and it is awesome to be honest.
+data_set = read.csv('https://www.football-data.co.uk/mmz4281/2223/SP1.csv')
+data_set = data_set[, c('HomeTeam', 'AwayTeam', 'FTHG', 'FTAG')]
+head(data_set)
 
-I'm trying to break down your code into smaller pieces for a better understanding but I can't get it at some points. Could you explain to me when you have time?
 
-1/ About making the dummy attack and defence matrix
- (the goalmodel_fit.R file)
-As I understand, we need to create a matrix including the coefficients for the parameters intercept, home field advantage and 40 attack and defence paramters for 20 teams. So I thought that the xmat matrix shape was (760, 42)? (line 355)
-Also, when you solve out the math, why you subtract one more column? (line 412)
-(I tried modifying the code and got errors)
+all_teams = unique(data_set$HomeTeam)
+team1 = data_set$HomeTeam
+team2 = data_set$AwayTeam
+n_teams = length(all_teams)
+team1 = c(team1)
+team2 = c(team2) 
 
-2/ The constraints
+goals1 = data_set$FTHG
+goals2 = data_set$FTAG
 
-Can you explain what these lines of code do?
+yy = c(goals1 - goals2)
+
+# Attack dummy matrix
+h_rating = matrix(0, nrow=length(goals2),
+               ncol = (n_teams-1))
+colnames(h_rating) = all_teams[-1]
+
+# Defense dummy matrix
+a_rating = matrix(0, nrow=length(goals2),
+               ncol = (n_teams-1))
+colnames(a_rating) = all_teams[-1]
+
+for (ii in 2:n_teams){
+  
+  t1_idx = team1 == all_teams[ii]
+  t2_idx = team2 == all_teams[ii]
+  h_rating[t1_idx, all_teams[ii]] = 1
+  a_rating[t2_idx, all_teams[ii]] = -1
+}
+
 # Sum-to-zero constraint for the first team.
-xmata[team1_stacked == all_teams[1]] = -1 (line 373)
-xmatd[team2_stacked == all_teams[1]] = -1
+h_rating[team1 == all_teams[1]] = -1
+a_rating[team2 == all_teams[1]] = 1
 
-I notice that the sum of attack abilities sum up to 0 but the sum of defence abilities doesn't. I'm not sure if the above lines of code are related.
+# Combine the attack and defence matrices.
+colnames(h_rating) = paste(colnames(h_rating), 'h_rating', sep='_')
+colnames(a_rating) = paste(colnames(a_rating), 'a_rating', sep='_')
 
-3/ This is not a question, they are just ideas that I want to share to you
+# Add home field advantage.
+ratings = cbind(hfa = rep(1, each=length(goals2)),
+               h_rating, a_rating)
+
+dim(ratings)
 
 
+glm_res = stats::glm.fit(x=ratings, y=yy,
+                         start=c(mean(yy + 0.05), rep(0, ncol(ratings)-1)),
+                         family=stats::gaussian(link='log'),
+                         control = list(maxit=100, epsilon = 1e-9),
+                         intercept = FALSE)
 
-Thanks! I really appreciate your time.
+Error: inner loop 1; cannot correct step size
