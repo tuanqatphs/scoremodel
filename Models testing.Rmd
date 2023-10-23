@@ -1,0 +1,2027 @@
+# Packages
+
+```{r}
+#install.packages('runjags')
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(plyr)
+library(MASS)
+library(Rcpp)
+library(JOUSBoost)
+library(rjags)
+library(scales)
+library(runjags)
+library(pscl)
+library(neuralnet)
+library(worldfootballR)
+library(Matrix)
+library(pracma)
+source('Functions.R')
+```
+
+# Data
+
+```{r}
+raw_23_24 = read.csv('EPL_2023_2024.csv')
+raw_22_23 = read.csv('EPL_2022_2023.csv')
+raw_21_22 = read.csv('EPL_2021_2022.csv')
+raw_20_21 = read.csv('EPL_2020_2021.csv')
+raw_19_20 = read.csv('EPL_2019_2020.csv')
+raw_18_19 = read.csv('EPL_2018_2019.csv')
+raw_17_18 = read.csv('EPL_2017_2018.csv')
+
+features = c('Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG',
+             'AvgH', 'AvgD', 'AvgA', 'AvgCH', 'AvgCD', 'AvgCA')
+
+sub_23_24 = raw_23_24[1:380, features]
+sub_22_23 = raw_22_23[1:380, features]
+sub_21_22 = raw_21_22[1:380, features]
+sub_20_21 = raw_20_21[1:380, features]
+sub_19_20 = raw_19_20[1:380, features]
+sub_18_19 = raw_18_19[1:380, features]
+```
+
+```{r}
+picks_chart = read.csv('Picks Chart.csv') %>% map_df(rev)
+
+picks_chart$FTHG = 
+  as.numeric(substring(picks_chart$Home.Goals, 1, 1))
+picks_chart$FTAG = 
+  as.numeric(substring(picks_chart$Away.Goals, 1, 1))
+
+picks_chart$elo_abs_error = abs(picks_chart$Elosup - 
+                                  (picks_chart$FTHG - picks_chart$FTAG))
+picks_chart$ml2_abs_error = abs(picks_chart$MlSup2 - 
+                                  (picks_chart$FTHG - picks_chart$FTAG))
+picks_chart$ml2_ge_abs_error = abs(picks_chart$Mlge2 - 
+                                  (picks_chart$FTHG + picks_chart$FTAG))
+```
+
+
+# Modelling
+
+## AVG direct
+
+### The first 50s
+
+```{r}
+last_season = sub_18_19
+last_season_prob = odds_to_prob(last_season[, c('AvgCH', 'AvgCD', 'AvgCA')])
+last_season_expg = prob_to_expg(last_season_prob$probabilities)
+
+last_season$xhg = last_season_expg$expg[, 1]
+last_season$xag = last_season_expg$expg[, 2]
+
+current_season = sub_19_20
+current_season_prob = odds_to_prob(current_season[, c('AvgCH', 'AvgCD', 'AvgCA')])
+current_season_expg = prob_to_expg(current_season_prob$probabilities)
+
+current_season$xhg = current_season_expg$expg[, 1]
+current_season$xag = current_season_expg$expg[, 2]
+```
+
+```{r}
+current_season_teams = unique(current_season$HomeTeam)
+last_season_teams = unique(last_season$HomeTeam)
+```
+
+```{r}
+new_teams = current_season_teams[!(current_season_teams %in% last_season_teams)]
+dropped_teams = last_season_teams[!(last_season_teams %in% current_season_teams)] 
+```
+
+```{r}
+replaced_last_season = last_season
+
+for (i in 1:length(new_teams)){
+  
+  replaced_last_season$HomeTeam[replaced_last_season$HomeTeam == dropped_teams[i]] = new_teams[i]
+  replaced_last_season$AwayTeam[replaced_last_season$AwayTeam == dropped_teams[i]] = new_teams[i]
+  
+}
+
+replaced_last_season_teams = unique(replaced_last_season$HomeTeam)
+#unique(current_season$HomeTeam)
+```
+
+```{r}
+current_season$HomeTeam[!(current_season$HomeTeam %in% replaced_last_season_teams)]
+```
+
+```{r}
+first_preds = current_season[1:50, ]
+first_preds$expg1 = rep(NA, 50)
+first_preds$expg2 = rep(NA, 50)
+
+new_train_set = replaced_last_season
+
+for (i in 1:5){
+  
+  if (i == 1){
+    
+    my_weights = weights_dc(as.Date(new_train_set$Date, format = '%d/%m/%Y'), xi=0.05)
+    replaced_model = expg_model(goals1 = round(new_train_set$xhg), goals2 = round(new_train_set$xag),
+                              team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam,
+                              model = 'gaussian', weights = my_weights)
+  }
+  
+  else{
+    replaced_model = expg_model(goals1 = round(new_train_set$xhg), goals2 = round(new_train_set$xag),
+                                team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam,
+                                model = 'gaussian', weights = NULL)
+  }
+  
+  lower_bound = 1 + (i-1)*10
+  upper_bound = i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  pred = pred_expg(replaced_model, return_df = T,
+                      team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                      team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$expg1[lower_bound:upper_bound] = pred$expg1
+  first_preds$expg2[lower_bound:upper_bound] = pred$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day) 
+  
+}
+
+```
+
+### The rest
+
+```{r}
+source('Functions.R')
+pred = matchday_predict(current_season, 50, 33)
+```
+
+```{r}
+pred$expg1[1:50] = first_preds$expg1
+pred$expg2[1:50] = first_preds$expg2
+```
+
+```{r}
+mar_ge_error = abs(pred$xhg + pred$xag - pred$FTHG - pred$FTAG)
+mar_sup_error = abs(pred$xhg - pred$xag - pred$FTHG + pred$FTAG)
+
+mod_ge_error = abs(pred$expg1 + pred$expg2 - pred$FTHG - pred$FTAG)
+mod_sup_error = abs(pred$expg1 - pred$expg2 - pred$FTHG + pred$FTAG)
+
+mean(mod_ge_error)
+mean(mod_sup_error)
+```
+
+## slides
+
+### 19_20
+
+```{r}
+mar_ge_error_19_20 = mar_ge_error
+mar_sup_error_19_20 = mar_sup_error
+
+mod_ge_error_19_20 = mod_ge_error
+mod_sup_error_19_20 = mod_sup_error
+```
+
+### 20_21
+```{r}
+mar_ge_error_20_21 = mar_ge_error
+mar_sup_error_20_21 = mar_sup_error
+
+mod_ge_error_20_21 = mod_ge_error
+mod_sup_error_20_21 = mod_sup_error
+```
+
+### 21_22
+```{r}
+mar_ge_error_21_22 = mar_ge_error
+mar_sup_error_21_22 = mar_sup_error
+
+mod_ge_error_21_22 = mod_ge_error
+mod_sup_error_21_22 = mod_sup_error
+```
+
+### 22_23
+
+```{r}
+mar_ge_error_22_23 = mar_ge_error
+mar_sup_error_22_23 = mar_sup_error
+
+mod_ge_error_22_23 = mod_ge_error
+mod_sup_error_22_23 = mod_sup_error
+```
+
+### miscellaneous mean
+
+```{r}
+mar_avg_ge = colMeans(rbind(mar_ge_error_19_20, mar_ge_error_20_21, mar_ge_error_21_22, mar_ge_error_22_23))
+mar_avg_sup = colMeans(rbind(mar_sup_error_19_20, mar_sup_error_20_21, mar_sup_error_21_22, mar_sup_error_22_23))
+
+mod_avg_ge = colMeans(rbind(mod_ge_error_19_20, mod_ge_error_20_21, mod_ge_error_21_22, mod_ge_error_22_23))
+mod_avg_sup = colMeans(rbind(mod_sup_error_19_20, mod_sup_error_20_21, mod_sup_error_21_22, mod_sup_error_22_23))
+```
+
+```{r}
+mean(mar_avg_ge[1:50])
+mean(mar_avg_ge[51:330])
+mean(mar_avg_ge[331:380])
+
+mean(mar_avg_sup[1:50])
+mean(mar_avg_sup[51:330])
+mean(mar_avg_sup[331:380])
+```
+
+```{r}
+mean(mod_avg_ge[1:50])
+mean(mod_avg_ge[51:330])
+mean(mod_avg_ge[331:380])
+
+mean(mod_avg_sup[1:50])
+mean(mod_avg_sup[51:330])
+mean(mod_avg_sup[331:380])
+```
+
+```{r}
+mean(mod_avg_ge)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'red')
+lines(cummean(fts_ge_error), type = 'l', col = 'black')
+
+plot(cummean(mar_sup_error), type = 'l', col = 'red')
+lines(cummean(fts_sup_error), type = 'l', col = 'black')
+```
+
+
+## Discon
+
+```{r}
+test_set = sub_19_20
+
+test_set_prob = implied_probabilities(test_set[, c('PSCH', 'PSCD', 'PSCA')], 
+                                      method = 'basic')
+test_set_expg = expg_from_probabilities(test_set_prob$probabilities)
+
+test_set$xhg = test_set_expg$expg[, 1]
+test_set$xag = test_set_expg$expg[, 2]
+
+true_sup = test_set$FTHG - test_set$FTAG
+true_ge = test_set$FTHG + test_set$FTAG
+```
+
+```{r}
+closing_prob = implied_probabilities(test_set[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+closing_expg = expg_from_probabilities(closing_prob$probabilities)
+
+closing_ge = closing_expg$expg[, 1] + closing_expg$exp[, 2]
+closing_sup = closing_expg$expg[, 1] - closing_expg$exp[, 2]
+
+closing_ge_error = abs(closing_ge - true_ge)
+closing_sup_error = abs(closing_sup - true_sup)
+```
+
+```{r}
+dis_pred = test_set[, !names(test_set) %in% c('AvgH', 'AvgD', 'AvgA', 
+                 'AvgCH', 'AvgCD', 'AvgCA', 'B365H', 'B365D', 'B365A', 
+                 'BWH', 'BWD', 'BWA', 'IWH', 'IWD', 'IWA', 
+             'PSH',	'PSD',	'PSA', 'WHCH',	'WHCD',	'WHCA',	'VCH',	'VCD',	'VCA')]
+
+dis_pred$expg1 = dis_pred$xhg
+dis_pred$expg2 = dis_pred$xag
+
+new_train_set = dis_pred[1:40, ]
+
+for (i in 1:340){
+  
+  # append new match
+  new_match = dis_pred[40+i, ]
+  new_train_set = rbind(new_train_set, new_match)
+  my_weights = weights_dc(as.Date(new_train_set$Date, format = '%d/%m/%Y'), 
+                          xi=0.01)
+  
+  #my_weights = NULL
+  # train the model
+  model = goalmodel(goals1 = round(new_train_set$xhg), 
+                    goals2 = round(new_train_set$xag),
+                    team1 = new_train_set$HomeTeam, 
+                    team2 = new_train_set$AwayTeam,
+                    dc = F, model = 'gaussian',
+                    weights = my_weights)
+  
+  # get parameters from the model
+  
+  model_params = data.frame(model$parameters)
+  model_params = cbind(rownames(model_params), rownames(model_params), 
+                       model_params)
+  rownames(model_params) = NULL
+  colnames(model_params) = c('HomeTeam', 'AwayTeam', 'attack', 'defense', 'hfa')
+  
+  # making a new data set with new params
+  
+  bbb = new_train_set
+
+  bbb$h_att = rep(NA, nrow(bbb))
+  bbb$a_def = rep(NA, nrow(bbb))
+  bbb$a_att = rep(NA, nrow(bbb))
+  bbb$h_def = rep(NA, nrow(bbb))
+
+  for (j in 1:nrow(bbb)){
+  
+    h_att_index = which(bbb$HomeTeam[j] == model_params$HomeTeam)
+    bbb$h_att[j] = model_params$attack[h_att_index]
+  
+    a_def_index = which(bbb$AwayTeam[j] == model_params$AwayTeam)
+    bbb$a_def[j] = model_params$defense[a_def_index]
+  
+    a_att_index = which(bbb$AwayTeam[j] == model_params$AwayTeam)
+    bbb$a_att[j] = model_params$attack[a_att_index]
+  
+    h_def_index = which(bbb$HomeTeam[j] == model_params$HomeTeam)
+    bbb$h_def[j] = model_params$defense[h_def_index]
+}
+
+  #bbb$hfa = model_params$hfa[1]
+  
+  # train a new model
+  
+  bbb_home_model = glm(xhg ~ h_att + a_def, 
+                            #dist = "negbin",
+                       #family = poisson(link = 'log'), 
+                       family = gaussian,
+                       data = bbb[1:(nrow(bbb)), ])
+  pred_fthg = predict(bbb_home_model, tail(bbb, 1))
+
+  bbb_away_model = glm(xag ~ a_att + h_def,
+                            #dist = "negbin",
+                       #family = poisson(link = 'log'),
+                       family = gaussian,
+                       data = bbb[1:(nrow(bbb)), ])
+  pred_ftag = predict(bbb_away_model, tail(bbb, 1))
+
+  # append the predictions
+  
+  dis_pred$expg1[40+i] = pred_fthg
+  dis_pred$expg2[40+i] = pred_ftag
+  
+}
+```
+
+```{r}
+dis_pred
+```
+
+```{r}
+my_ge_error = abs(dis_pred$expg1 + dis_pred$expg2 - true_ge)
+my_sup_error = abs(dis_pred$expg1 - dis_pred$expg2 - true_sup)
+
+mean(my_ge_error)
+mean(my_sup_error)
+```
+
+```{r}
+plot(cummean(my_ge_error), type = 'l', col = 'green')
+lines(cummean(closing_ge_error), type = 'l', col = 'blue')
+
+plot(cummean(my_sup_error), type = 'l', col = 'green')
+lines(cummean(closing_sup_error), type = 'l', col = 'blue')
+```
+
+```{r}
+data.frame(wei_expg1, wei_expg2)[41:380, ]
+```
+
+```{r}
+cummean(closing_ge_error)[380]
+cummean(closing_sup_error)[380]
+```
+
+
+## Neural network
+
+```{r}
+test_set = sub_22_23
+
+test_set_prob = implied_probabilities(test_set[, c('PSCH', 'PSCD', 'PSCA')], 
+                                      method = 'basic')
+test_set_expg = expg_from_probabilities(test_set_prob$probabilities)
+
+test_set$xhg = test_set_expg$expg[, 1]
+test_set$xag = test_set_expg$expg[, 2]
+
+true_sup = test_set$FTHG - test_set$FTAG
+true_ge = test_set$FTHG + test_set$FTAG
+```
+
+```{r}
+closing_prob = implied_probabilities(test_set[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+closing_expg = expg_from_probabilities(closing_prob$probabilities)
+
+closing_ge = closing_expg$expg[, 1] + closing_expg$exp[, 2]
+closing_sup = closing_expg$expg[, 1] - closing_expg$exp[, 2]
+
+closing_ge_error = abs(closing_ge - true_ge)
+closing_sup_error = abs(closing_sup - true_sup)
+```
+
+```{r}
+source('abc.R')
+pred = epl_nn(test_set, 50, 33)
+```
+
+```{r}
+pred_ge = pred$expg1 + pred$expg2
+pred_sup = pred$expg1 - pred$expg2
+
+mar_ge = pred$xhg + pred$xag
+mar_sup= pred$xhg - pred$xag
+
+mean(abs(pred_ge - true_ge)[51:380])
+mean(abs(pred_sup - true_sup)[51:380])
+
+mean(closing_ge_error[51:380])
+mean(closing_sup_error[51:380])
+```
+```{r}
+neuralnet(xag ~ a_att + h_def, hidden = c(5, 5),
+                             data = bbb[1:(nrow(bbb)-1), ],
+                             threshold = 1,
+                             stepmax = 1e7)
+```
+
+
+
+## XG again
+
+### Last season
+
+```{r}
+last_season = merge(sub_18_19, picks_chart[761: 1140, ], by = c('HomeTeam', 'AwayTeam'))
+last_season = last_season[order(as.Date(last_season$Date, format="%d/%m/%Y")), ]
+
+last_season_prob = odds_to_prob(last_season[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+last_season_expg = prob_to_expg(last_season_prob$probabilities)
+
+last_season$xhg = last_season_expg$expg[, 1]
+last_season$xag = last_season_expg$expg[, 2]
+
+last_season$opta_xhg = 
+  as.numeric(substring(last_season$Home.Goals, 4, 7))
+last_season$opta_xag = 
+  as.numeric(substring(last_season$Away.Goals, 4, 7))
+
+last_season = last_season[, c('Date', 'HomeTeam', 'AwayTeam', 'FTHG.x', 'FTAG.y', 'opta_xhg', 'opta_xag',
+                              'xhg', 'xag', 'AvgCH', 'AvgCD', 'AvgCA')]
+```
+
+```{r}
+current_season = merge(sub_19_20, picks_chart[1141: 1520, ], by = c('HomeTeam', 'AwayTeam'))
+current_season = current_season[order(as.Date(current_season$Date, format="%d/%m/%Y")), ]
+
+current_season_prob = odds_to_prob(current_season[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+current_season_expg = prob_to_expg(current_season_prob$probabilities)
+
+current_season$xhg = current_season_expg$expg[, 1]
+current_season$xag = current_season_expg$expg[, 2]
+
+current_season$opta_xhg = 
+  as.numeric(substring(current_season$Home.Goals, 4, 7))
+current_season$opta_xag = 
+  as.numeric(substring(current_season$Away.Goals, 4, 7))
+
+current_season = current_season[, c('Date', 'HomeTeam', 'AwayTeam', 'FTHG.x', 'FTAG.y', 'opta_xhg', 'opta_xag',
+                              'xhg', 'xag', 'AvgCH', 'AvgCD', 'AvgCA')]
+```
+
+
+```{r}
+current_season_teams = unique(current_season$HomeTeam)
+last_season_teams = unique(last_season$HomeTeam)
+
+new_teams = current_season_teams[!(current_season_teams %in% last_season_teams)]
+dropped_teams = last_season_teams[!(last_season_teams %in% current_season_teams)] 
+
+replaced_last_season = last_season
+
+for (i in 1:length(new_teams)){
+  
+  replaced_last_season$HomeTeam[replaced_last_season$HomeTeam == dropped_teams[i]] = new_teams[i]
+  replaced_last_season$AwayTeam[replaced_last_season$AwayTeam == dropped_teams[i]] = new_teams[i]
+  
+}
+
+replaced_last_season_teams = unique(replaced_last_season$HomeTeam)
+current_season$HomeTeam[!(current_season$HomeTeam %in% replaced_last_season_teams)]
+```
+
+```{r}
+first_preds = current_season[1:50, ]
+first_preds$expg1 = rep(NA, 50)
+first_preds$expg2 = rep(NA, 50)
+
+new_train_set = replaced_last_season
+
+for (i in 1:5){
+  
+  replaced_model = expg_model(goals1 = round(new_train_set$opta_xhg * 0 + new_train_set$FTHG.x * 0 + new_train_set$xhg * 1), 
+                              goals2 = round(new_train_set$opta_xag * 0 + new_train_set$FTAG.y * 0 + new_train_set$xag * 1),
+                              team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam,
+                              model = 'gaussian')
+  lower_bound = 1 + (i-1)*10
+  upper_bound = i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  pred = pred_expg(replaced_model, return_df = T,
+                      team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                      team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$expg1[lower_bound:upper_bound] = pred$expg1
+  first_preds$expg2[lower_bound:upper_bound] = pred$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day) 
+}
+```
+
+### Current season
+
+```{r}
+pred = current_season
+pred$expg1 = rep(NA, nrow(pred))
+pred$expg2 = rep(NA, nrow(pred))
+
+played_matches = 50
+new_train_set = pred[1:played_matches, ]
+
+for (i in 1:33){
+  
+  model = expg_model(goals1 = round(new_train_set$opta_xhg * 0 + new_train_set$FTHG.x * 0 + new_train_set$xhg * 1), 
+                     goals2 = round(new_train_set$opta_xag * 0 + new_train_set$FTAG.y * 0 + new_train_set$xag * 1),
+                     team1 = new_train_set$HomeTeam, 
+                     team2 = new_train_set$AwayTeam,
+                     model = 'gaussian')
+  
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+  
+  new_match_day = pred[lower_bound:upper_bound, ]
+  
+  new_pred = pred_expg(model, return_df = TRUE, 
+                          team1 = new_match_day$HomeTeam, 
+                          team2 = new_match_day$AwayTeam)
+  
+  pred$expg1[lower_bound:upper_bound] = new_pred$expg1
+  pred$expg2[lower_bound:upper_bound] = new_pred$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+}
+```
+
+```{r}
+pred$expg1[1:50] = first_preds$expg1
+pred$expg2[1:50] = first_preds$expg2
+```
+
+```{r}
+mar_ge_error = abs(pred$xhg + pred$xag - pred$FTHG.x - pred$FTAG.y)
+mar_sup_error = abs(pred$xhg - pred$xag - pred$FTHG.x + pred$FTAG.y)
+
+ge_error = abs(pred$expg1 + pred$expg2 - pred$FTHG - pred$FTAG)
+sup_error = abs(pred$expg1 - pred$expg2 - pred$FTHG + pred$FTAG)
+```
+
+```{r}
+mean(ge_error)
+mean(sup_error)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'red', ylim = c(0.5, 1.6), ylab = 'GE error', xlab = 'Match')
+lines(cummean(opta_ge_error), type = 'l', col = 'orange')
+lines(cummean(xg_ge_error), type = 'l', col = 'green')
+lines(cummean(fts_ge_error), type = 'l', col = 'black')
+lines(cummean(mix_ge_error), type = 'l', col = 'blue')
+legend(30, 1, legend=c("Market", "Post-match xG", "Pre-match xG", "Full time goal", "Mixture"),
+       col=c("red", "orange", 'green', 'black', 'blue'), lty = 1, text.font = 1)
+
+plot(cummean(mar_sup_error), type = 'l', col = 'red', ylim = c(1.1, 2.2),  ylab = 'SUP error', xlab = 'Match')
+lines(cummean(opta_sup_error), type = 'l', col = 'orange')
+lines(cummean(xg_sup_error), type = 'l', col = 'green')
+lines(cummean(fts_sup_error), type = 'l', col = 'black')
+lines(cummean(mix_sup_error), type = 'l', col = 'blue')
+legend(250, 2.2, legend=c("Market", "Post-match xG", "Pre-match xG", "Full time goal", "Mixture"),
+       col=c("red", "orange", 'green', 'black', 'blue'), lty = 1, text.font = 1)
+```
+
+# Draft
+
+## slides
+
+```{r}
+last_season = merge(sub_18_19, picks_chart[761: 1140, ], by = c('HomeTeam', 'AwayTeam'))
+last_season = last_season[order(as.Date(last_season$Date, format="%d/%m/%Y")), ]
+
+last_season_prob = odds_to_prob(last_season[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+last_season_expg = prob_to_expg(last_season_prob$probabilities)
+
+last_season$xhg = last_season_expg$expg[, 1]
+last_season$xag = last_season_expg$expg[, 2]
+
+last_season$opta_xhg = 
+  as.numeric(substring(last_season$Home.Goals, 4, 7))
+last_season$opta_xag = 
+  as.numeric(substring(last_season$Away.Goals, 4, 7))
+
+last_season = last_season[, c('Date', 'HomeTeam', 'AwayTeam', 'FTHG.x', 'FTAG.y', 'opta_xhg', 'opta_xag',
+                              'xhg', 'xag', 'AvgCH', 'AvgCD', 'AvgCA')]
+```
+
+```{r}
+current_season = merge(sub_19_20, picks_chart[1141: 1520, ], by = c('HomeTeam', 'AwayTeam'))
+current_season = current_season[order(as.Date(current_season$Date, format="%d/%m/%Y")), ]
+
+current_season_prob = odds_to_prob(current_season[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+current_season_expg = prob_to_expg(current_season_prob$probabilities)
+
+current_season$xhg = current_season_expg$expg[, 1]
+current_season$xag = current_season_expg$expg[, 2]
+
+current_season$opta_xhg = 
+  as.numeric(substring(current_season$Home.Goals, 4, 7))
+current_season$opta_xag = 
+  as.numeric(substring(current_season$Away.Goals, 4, 7))
+
+current_season = current_season[, c('Date', 'HomeTeam', 'AwayTeam', 'FTHG.x', 'FTAG.y', 'opta_xhg', 'opta_xag',
+                              'xhg', 'xag', 'AvgCH', 'AvgCD', 'AvgCA')]
+```
+
+```{r}
+current_season_teams = unique(current_season$HomeTeam)
+last_season_teams = unique(last_season$HomeTeam)
+
+new_teams = current_season_teams[!(current_season_teams %in% last_season_teams)]
+dropped_teams = last_season_teams[!(last_season_teams %in% current_season_teams)] 
+
+replaced_last_season = last_season
+
+for (i in 1:length(new_teams)){
+  
+  replaced_last_season$HomeTeam[replaced_last_season$HomeTeam == dropped_teams[i]] = new_teams[i]
+  replaced_last_season$AwayTeam[replaced_last_season$AwayTeam == dropped_teams[i]] = new_teams[i]
+  
+}
+
+replaced_last_season_teams = unique(replaced_last_season$HomeTeam)
+current_season$HomeTeam[!(current_season$HomeTeam %in% replaced_last_season_teams)]
+```
+
+```{r}
+first_preds = current_season[1:50, ]
+
+first_preds$expg1_xg = rep(NA, 50)
+first_preds$expg2_xg = rep(NA, 50)
+
+first_preds$expg1_opta = rep(NA, 50)
+first_preds$expg2_opta = rep(NA, 50)
+
+first_preds$expg1_fts = rep(NA, 50)
+first_preds$expg2_fts = rep(NA, 50)
+
+first_preds$expg1_mix = rep(NA, 50)
+first_preds$expg2_mix = rep(NA, 50)
+
+new_train_set = replaced_last_season
+
+for (i in 1:5){
+  
+  replaced_model_xg = expg_model(goals1 = round(new_train_set$xhg), 
+                                 goals2 = round(new_train_set$xag),
+                                 team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  replaced_model_opta = expg_model(goals1 = round(new_train_set$opta_xhg), 
+                                   goals2 = round(new_train_set$opta_xag),
+                                   team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  replaced_model_fts = expg_model(goals1 = round(new_train_set$FTHG.x), 
+                                  goals2 = round(new_train_set$FTAG.y),
+                                  team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  replaced_model_mix = expg_model(goals1 = round(new_train_set$opta_xhg * 1/3 + new_train_set$FTHG.x * 1/3 + new_train_set$xhg * 1/3), 
+                                  goals2 = round(new_train_set$opta_xag * 1/3 + new_train_set$FTAG.y * 1/3 + new_train_set$xag * 1/3),
+                                  team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  lower_bound = 1 + (i-1)*10
+  upper_bound = i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  pred_xg = pred_expg(replaced_model_xg, return_df = T,
+                      team1 = new_match_day$HomeTeam, 
+                      team2 = new_match_day$AwayTeam)
+  
+  pred_opta = pred_expg(replaced_model_opta, return_df = T,
+                        team1 = new_match_day$HomeTeam, 
+                        team2 = new_match_day$AwayTeam)
+  
+  pred_fts = pred_expg(replaced_model_fts, return_df = T,
+                       team1 = new_match_day$HomeTeam, 
+                       team2 = new_match_day$AwayTeam)
+  
+  pred_mix = pred_expg(replaced_model_mix, return_df = T,
+                       team1 = new_match_day$HomeTeam, 
+                       team2 = new_match_day$AwayTeam)
+  
+  first_preds$expg1_xg[lower_bound:upper_bound] = pred_xg$expg1
+  first_preds$expg2_xg[lower_bound:upper_bound] = pred_xg$expg2
+  
+  first_preds$expg1_opta[lower_bound:upper_bound] = pred_opta$expg1
+  first_preds$expg2_opta[lower_bound:upper_bound] = pred_opta$expg2
+  
+  first_preds$expg1_fts[lower_bound:upper_bound] = pred_fts$expg1
+  first_preds$expg2_fts[lower_bound:upper_bound] = pred_fts$expg2
+  
+  first_preds$expg1_mix[lower_bound:upper_bound] = pred_mix$expg1
+  first_preds$expg2_mix[lower_bound:upper_bound] = pred_mix$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day) 
+}
+```
+
+```{r}
+pred = current_season
+
+pred$expg1_xg = rep(NA, nrow(pred))
+pred$expg2_xg = rep(NA, nrow(pred))
+
+pred$expg1_opta = rep(NA, nrow(pred))
+pred$expg2_opta = rep(NA, nrow(pred))
+
+pred$expg1_fts = rep(NA, nrow(pred))
+pred$expg2_fts = rep(NA, nrow(pred))
+
+pred$expg1_mix = rep(NA, nrow(pred))
+pred$expg2_mix = rep(NA, nrow(pred))
+
+played_matches = 50
+new_train_set = current_season[1:played_matches, ]
+
+for (i in 1:33){
+  
+  #i = 1
+  model_xg = expg_model(goals1 = round(new_train_set$xhg), 
+                        goals2 = round(new_train_set$xag),
+                        team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  model_opta = expg_model(goals1 = round(new_train_set$opta_xhg), 
+                          goals2 = round(new_train_set$opta_xag),
+                          team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  model_fts = expg_model(goals1 = round(new_train_set$FTHG.x), 
+                         goals2 = round(new_train_set$FTAG.y),
+                          team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  model_mix = expg_model(goals1 = round(new_train_set$opta_xhg * 1/3 + new_train_set$FTHG.x * 1/3 + new_train_set$xhg * 1/3), 
+                         goals2 = round(new_train_set$opta_xag * 1/3 + new_train_set$FTAG.y * 1/3 + new_train_set$xag * 1/3),
+                         team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, model = 'gaussian')
+  
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  pred_xg = pred_expg(model_xg, return_df = T,
+                      team1 = new_match_day$HomeTeam, 
+                      team2 = new_match_day$AwayTeam)
+  
+  pred_opta = pred_expg(model_opta, return_df = T,
+                        team1 = new_match_day$HomeTeam, 
+                        team2 = new_match_day$AwayTeam)
+  
+  pred_fts = pred_expg(model_fts, return_df = T,
+                       team1 = new_match_day$HomeTeam, 
+                       team2 = new_match_day$AwayTeam)
+  
+  pred_mix = pred_expg(model_mix, return_df = T,
+                       team1 = new_match_day$HomeTeam, 
+                       team2 = new_match_day$AwayTeam)
+  
+  pred$expg1_xg[lower_bound:upper_bound] = pred_xg$expg1
+  pred$expg2_xg[lower_bound:upper_bound] = pred_xg$expg2
+  
+  pred$expg1_opta[lower_bound:upper_bound] = pred_opta$expg1
+  pred$expg2_opta[lower_bound:upper_bound] = pred_opta$expg2
+  
+  pred$expg1_fts[lower_bound:upper_bound] = pred_fts$expg1
+  pred$expg2_fts[lower_bound:upper_bound] = pred_fts$expg2
+  
+  pred$expg1_mix[lower_bound:upper_bound] = pred_mix$expg1
+  pred$expg2_mix[lower_bound:upper_bound] = pred_mix$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+}
+```
+
+```{r}
+pred$expg1_xg[1:50] = first_preds$expg1_xg
+pred$expg2_xg[1:50] = first_preds$expg2_xg
+
+pred$expg1_opta[1:50] = first_preds$expg1_opta
+pred$expg2_opta[1:50] = first_preds$expg2_opta
+
+pred$expg1_fts[1:50] = first_preds$expg1_fts
+pred$expg2_fts[1:50] = first_preds$expg2_fts
+
+pred$expg1_mix[1:50] = first_preds$expg1_mix
+pred$expg2_mix[1:50] = first_preds$expg2_mix
+```
+
+```{r}
+mar_ge_error = abs(pred$xhg + pred$xag - pred$FTHG.x - pred$FTAG.y)
+mar_sup_error = abs(pred$xhg - pred$xag - pred$FTHG.x + pred$FTAG.y)
+
+xg_ge_error = abs(pred$expg1_xg + pred$expg2_xg - pred$FTHG.x - pred$FTAG.y)
+xg_sup_error = abs(pred$expg1_xg - pred$expg2_xg - pred$FTHG.x + pred$FTAG.y)
+
+opta_ge_error = abs(pred$expg1_opta + pred$expg2_opta - pred$FTHG - pred$FTAG)
+opta_sup_error = abs(pred$expg1_opta - pred$expg2_opta - pred$FTHG + pred$FTAG)
+
+fts_ge_error = abs(pred$expg1_fts + pred$expg2_fts - pred$FTHG - pred$FTAG)
+fts_sup_error = abs(pred$expg1_fts - pred$expg2_fts - pred$FTHG + pred$FTAG)
+
+mix_ge_error = abs(pred$expg1_mix + pred$expg2_mix - pred$FTHG - pred$FTAG)
+mix_sup_error = abs(pred$expg1_mix - pred$expg2_mix - pred$FTHG + pred$FTAG)
+```
+
+### 19_20
+```{r}
+mar_ge_19_20 = mean(mar_ge_error)
+mar_sup_19_20 = mean(mar_sup_error)
+
+xg_ge_19_20 = mean(xg_ge_error)
+xg_sup_19_20 = mean(xg_sup_error)
+
+opta_ge_19_20 = mean(opta_ge_error)
+opta_sup_19_20 = mean(opta_sup_error)
+
+fts_ge_19_20 = mean(fts_ge_error)
+fts_sup_19_20 = mean(fts_sup_error)
+
+mix_ge_19_20 = mean(mix_ge_error)
+mix_sup_19_20 = mean(mix_sup_error)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'green', ylab = 'GE error', xlab = 'Match')
+lines(cummean(xg_ge_error), type = 'l', col = 'red')
+abline(v = 50)
+
+plot(cummean(mar_sup_error), type = 'l', col = 'green', ylab = 'SUP error', xlab = 'Match')
+lines(cummean(xg_sup_error), type = 'l', col = 'red')
+abline(v = 50)
+```
+
+
+### 20_21
+```{r}
+mar_ge_20_21 = mean(mar_ge_error)
+mar_sup_20_21 = mean(mar_sup_error)
+
+xg_ge_20_21 = mean(xg_ge_error)
+xg_sup_20_21 = mean(xg_sup_error)
+
+opta_ge_20_21 = mean(opta_ge_error)
+opta_sup_20_21 = mean(opta_sup_error)
+
+fts_ge_20_21 = mean(fts_ge_error)
+fts_sup_20_21 = mean(fts_sup_error)
+
+mix_ge_20_21 = mean(mix_ge_error)
+mix_sup_20_21 = mean(mix_sup_error)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'red', ylab = 'GE error', xlab = 'Match')
+lines(cummean(xg_ge_error), type = 'l', col = 'green')
+abline(v = 50)
+
+plot(cummean(mar_sup_error), type = 'l', col = 'red', ylim = c(1.0, 2.05), ylab = 'SUP error', xlab = 'Match')
+lines(cummean(xg_sup_error), type = 'l', col = 'green')
+abline(v = 50)
+```
+
+### 21_22
+```{r}
+mar_ge_21_22 = mean(mar_ge_error)
+mar_sup_21_22 = mean(mar_sup_error)
+
+xg_ge_21_22 = mean(xg_ge_error)
+xg_sup_21_22 = mean(xg_sup_error)
+
+opta_ge_21_22 = mean(opta_ge_error)
+opta_sup_21_22 = mean(opta_sup_error)
+
+fts_ge_21_22 = mean(fts_ge_error)
+fts_sup_21_22 = mean(fts_sup_error)
+
+mix_ge_21_22 = mean(mix_ge_error)
+mix_sup_21_22 = mean(mix_sup_error)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'red', ylab = 'GE error', xlab = 'Match')
+lines(cummean(xg_ge_error), type = 'l', col = 'green')
+abline(v = 50)
+
+plot(cummean(mar_sup_error), type = 'l', col = 'red', ylab = 'SUP error', xlab = 'Match')
+lines(cummean(xg_sup_error), type = 'l', col = 'green')
+abline(v = 50)
+```
+
+### 22_23
+```{r}
+mar_ge_22_23 = mean(mar_ge_error)
+mar_sup_22_23 = mean(mar_sup_error)
+
+xg_ge_22_23 = mean(xg_ge_error)
+xg_sup_22_23 = mean(xg_sup_error)
+
+opta_ge_22_23 = mean(opta_ge_error)
+opta_sup_22_23 = mean(opta_sup_error)
+
+fts_ge_22_23 = mean(fts_ge_error)
+fts_sup_22_23 = mean(fts_sup_error)
+
+mix_ge_22_23 = mean(mix_ge_error)
+mix_sup_22_23 = mean(mix_sup_error)
+```
+
+```{r}
+plot(cummean(mar_ge_error), type = 'l', col = 'red', ylab = 'GE error', xlab = 'Match')
+lines(cummean(xg_ge_error), type = 'l', col = 'green')
+abline(v = 50)
+
+plot(cummean(mar_sup_error), type = 'l', col = 'red', ylab = 'SUP error', xlab = 'Match')
+lines(cummean(xg_sup_error), type = 'l', col = 'green')
+abline(v = 50)
+```
+
+
+### plots
+```{r}
+### GE
+plot(c(mar_ge_19_20, mar_ge_20_21, mar_ge_21_22, mar_ge_22_23), type = 'l', 
+     col = 'red', ylim = c(1.1, 1.5), ylab = 'GE error', xlab = 'English Premier League Season', 
+     xaxt = 'n')
+axis(1, at = 1:4, labels = c('19_20', '20_21', '21_22', '22_23'))
+
+lines(c(xg_ge_19_20, xg_ge_20_21, xg_ge_21_22, xg_ge_22_23), type = 'l', col = 'green')
+lines(c(opta_ge_19_20, opta_ge_20_21, opta_ge_21_22, opta_ge_22_23), type = 'l', col = 'orange')
+lines(c(fts_ge_19_20, fts_ge_20_21, fts_ge_21_22, fts_ge_22_23), type = 'l', col = 'black')
+lines(c(mix_ge_19_20, mix_ge_20_21, mix_ge_21_22, mix_ge_22_23), type = 'l', col = 'blue')
+
+size = par(cex = 0.75)
+legend(3, 1.27, legend=c("Market", "Post-match xG", "Pre-match xG", "Full time goal", "Mixture"),
+       col=c("red", "orange", 'green', 'black', 'blue'), lty = 1, text.font = 1)
+
+### SUP
+plot(c(mar_sup_19_20, mar_sup_20_21, mar_sup_21_22, mar_sup_22_23), type = 'l', 
+     col = 'red', ylim = c(1.2, 1.5), ylab = 'SUP error', xlab = 'English Premier League Season',
+     xaxt = 'n')
+axis(1, at = 1:4, labels = c('19_20', '20_21', '21_22', '22_23'))
+
+lines(c(xg_sup_19_20, xg_sup_20_21, xg_sup_21_22, xg_sup_22_23), type = 'l', col = 'green')
+lines(c(opta_sup_19_20, opta_sup_20_21, opta_sup_21_22, opta_sup_22_23), type = 'l', col = 'orange')
+lines(c(fts_sup_19_20, fts_sup_20_21, fts_sup_21_22, fts_sup_22_23), type = 'l', col = 'black')
+lines(c(mix_sup_19_20, mix_sup_20_21, mix_sup_21_22, mix_sup_22_23), type = 'l', col = 'blue')
+
+size = par(cex = 0.75)
+legend(3, 1.29, legend=c("Market", "Post-match xG", "Pre-match xG", "Full time goal", "Mixture"),
+       col=c("red", "orange", 'green', 'black', 'blue'), lty = 1)
+```
+
+
+## quan reg and sql
+
+```{r}
+#install.packages('RJDBC')
+#library(RJDBC)
+require(RJDBC)
+  cat('Connecting to Hive. ')
+  cp=c("hive-jdbc-3.1.0.3.1.0.0-78-standalone","hadoop-common-3.1.1.3.1.0.0-78")
+  .jinit(classpath=cp)
+  drv = JDBC("org.apache.hive.jdbc.HiveDriver","C:\\Users\\01VT057.Tuan.N\\Downloads\\About SQL\\sql workbench j\\hive-jdbc-3.1.0.3.1.0.0-78-standalone.jar")
+  conn = dbConnect(drv, "jdbc:hive2://10.12.8.18:10000/default;", "csp_vonjacob_bernardino", "pass.123")
+  conn = dbConnect(drv, "jdbc:hive2://10.12.8.18:10000/default;", "csp_vonjacob_bernardino", "pass.123")
+  cat('Connected.\n')
+  
+  dbSendUpdate(conn,"set tez.queue.name = bi-dashboards")
+```
+
+```{r}
+dbGetQuery(conn,"select count(*) as cnt from xg_prod.prod_map_opta_ec_events")
+```
+
+```{r}
+#install.packages('quantreg')
+library(quantreg)
+quan_mod = quantreg::rq(los ~ ., data = azdrg112)
+quan_pred = predict(quan_mod, azdrg112, type = 'response')
+mean(abs(quan_pred - azdrg112$los))
+```
+
+## Teams abilities
+```{r}
+test_set = sub_20_21
+test_set_prob = odds_to_prob(test_set[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                      method = 'basic')
+test_set_expg = prob_to_expg(test_set_prob$probabilities)
+
+test_set$xhg = test_set_expg$expg[, 1]
+test_set$xag = test_set_expg$expg[, 2]
+```
+
+
+```{r}
+played_matches = 50
+new_train_set = test_set[1:played_matches, ]
+
+all_params = data.frame(matrix(nrow = 0, ncol = 6))
+colnames(all_params) = c('Team', 'attack', 'defense', 'intercept', 'sigma', 'hfa')
+
+for (i in 1:33){
+  
+  model = expg_model(goals1 = round(new_train_set$xhg), 
+                     goals2 = round(new_train_set$xag),
+                     team1 = new_train_set$HomeTeam, 
+                     team2 = new_train_set$AwayTeam,
+                     dc = F, model = 'gaussian')
+  
+  new_params = data.frame(model$parameters)
+  new_params = cbind(rownames(new_params), new_params)
+  rownames(new_params) = NULL
+  names(new_params)[names(new_params) == 'rownames(new_params)'] = 'Team'
+  new_params = new_params[order(new_params$Team), ]
+  
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+  
+  new_match_day = test_set[lower_bound:upper_bound, ]
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+  #print(nrow(new_train_set))
+
+  all_params = rbind(all_params, new_params)
+  
+}
+```
+
+```{r}
+#all_params$attack[all_params$Team == 'Wolves']
+plot(all_params$attack[all_params$Team == 'Arsenal'], type = 'l', ylim = c(-0.3, 0.3))
+lines(all_params$attack[all_params$Team == 'Aston Villa'], type = 'l', col = 'green')
+lines(all_params$attack[all_params$Team == 'Bournemouth'], type = 'l', col = 'red')
+lines(all_params$attack[all_params$Team == 'Brighton'], type = 'l', col = 'purple')
+lines(all_params$attack[all_params$Team == 'Burnley'], type = 'l', col = 'yellow')
+lines(all_params$attack[all_params$Team == 'Man United'], type = 'l', col = 'blue')
+lines(all_params$attack[all_params$Team == 'Newcastle'], type = 'l', col = 'brown')
+lines(all_params$attack[all_params$Team == 'Wolves'], type = 'l', col = 'orange')
+```
+
+
+
+```{r}
+expg_model(last_season$xhg, last_season$xag, 
+           last_season$HomeTeam, last_season$AwayTeam, 
+           model = 'gaussian')$parameters
+
+```
+
+```{r}
+expg_model(current_season$xhg[1:50], current_season$xag[1:50], 
+           current_season$HomeTeam[1:50], current_season$AwayTeam[1:50], 
+           model = 'gaussian')$parameters
+```
+
+
+## bay
+
+```{r}
+library(coda)
+library(rjags)
+library(mcmcplots)
+library(stringr)
+library(plyr)
+library(xtable)
+library(ggplot2)
+```
+
+```{r}
+my_df = read.csv('https://www.football-data.co.uk/mmz4281/2223/E0.csv')
+my_df = my_df[, c('HomeTeam', 'AwayTeam', 'FTHG', 'FTAG')]
+```
+
+```{r}
+my_df$HomeTeam=as.character(my_df$HomeTeam)
+my_df$AwayTeam=as.character(my_df$AwayTeam)
+
+teams = unique(c(my_df$HomeTeam, my_df$AwayTeam))
+
+# JAGS list with the data from my_df in integer strings
+DATAlist = list(FTHG = my_df$FTHG, FTAG = my_df$FTAG, 
+                HomeTeam = as.numeric(factor(my_df$HomeTeam, levels=teams)),
+                AwayTeam = as.numeric(factor(my_df$AwayTeam, levels=teams)),
+                n_teams = length(teams), n_games = nrow(my_df))
+
+# Generator for the type of column names Jags outputs.
+column_name = function(name, ...) {
+  paste0(name, "[", paste(..., sep=",") , "]")
+}
+
+
+model_string = "model {
+for(i in 1:n_games) {
+  FTHG[i] ~ dpois(lambda_home[HomeTeam[i],AwayTeam[i]])
+  FTAG[i] ~ dpois(lambda_away[HomeTeam[i],AwayTeam[i]])
+}
+
+for(HomeTeam_i in 1:n_teams) {
+  for(AwayTeam_i in 1:n_teams) {
+    lambda_home[HomeTeam_i, AwayTeam_i] = exp(int + hfa + 
+                                    attack[HomeTeam_i] - defence[AwayTeam_i])
+    lambda_away[HomeTeam_i, AwayTeam_i] = exp(int + 
+                                    attack[AwayTeam_i] - defence[HomeTeam_i])
+  }
+}
+
+attack[1] = 0
+defence[1] = 0
+
+for(j in 2:n_teams) {
+  attack[j] ~ dnorm(group_skill, group_tau)
+  defence[j] ~ dnorm(group_skill, group_tau)
+}  
+
+group_skill ~ dnorm(0, 0.0625)
+group_tau = 1 / pow(group_sigma, 2)
+group_sigma ~ dunif(0, 3)
+int ~ dnorm(0, 0.0625)
+hfa ~ dnorm(0, 0.0625)
+}"
+```
+
+```{r}
+model1 = jags.model(textConnection(model1_string), 
+                    data=DATAlist, n.chains=3, n.adapt=1000)
+update(model1, 1000)
+params = c("int",'hfa',  "attack", 'defence', "group_skill", "group_sigma")
+s1 = coda.samples(model1, variable.names = params, n.iter = 1e4)
+ms1 = as.matrix(s1)
+```
+
+```{r}
+plot(s1[,column_name("askill", which(teams == "Arsenal"))])
+plot(s1[,column_name("dskill", which(teams == "Arsenal"))])
+plot(s1[,column_name("askill", which(teams == "Chelsea"))])
+plot(s1[,column_name("dskill", which(teams == "Fulham"))])
+```
+
+```{r}
+params_result = data.frame(colMeans(ms1))
+int = params_result['int', ]
+hfa = params_result['hfa', ]
+team_abilities = as.matrix(params_result[!rownames(params_result) %in% 
+                            c('int', 'hfa', "group_skill", "group_sigma"), ])
+dim(team_abilities) = c(20, 2)
+team_abilities = data.frame(team_abilities)
+colnames(team_abilities) = c('att', 'def')
+team_abilities$team = my_df$HomeTeam[1:20]
+
+team_abilities
+```
+
+```{r}
+sum(team_abilities$att)
+```
+
+
+```{r}
+df$h_att = rep(NA, 380)
+df$a_def = rep(NA, 380)
+df$a_att = rep(NA, 380)
+df$h_def = rep(NA, 380)
+
+for (i in 1:380){
+  
+  h_index = which(team_abilities$team == df$HomeTeam[i])
+  df$h_att[i] = team_abilities$att[h_index]
+  df$h_def[i] = team_abilities$def[h_index]
+
+  a_index = which(team_abilities$team == df$AwayTeam[i])
+  df$a_att[i] = team_abilities$att[a_index]
+  df$a_def[i] = team_abilities$def[a_index]
+  
+  
+}
+
+df
+```
+
+```{r}
+df$expg1 = exp(int + hfa + df$h_att - df$a_def)
+df$expg2 = exp(int + df$a_att - df$h_def)
+df
+```
+
+```{r}
+mean(abs(df$expg1 + df$expg2 - df$FTHG - df$FTAG))
+mean(abs(df$expg1 - df$expg2 - df$FTHG + df$FTAG))
+```
+
+```{r}
+freq_model = goalmodel(goals1 = df$FTHG, goals2 = df$FTAG,
+                       team1 = df$HomeTeam, team2 = df$AwayTeam,
+                       model = 'gaussian')
+freq_expg = predict_expg(freq_model, return = T,
+                         team1 = df$HomeTeam, team2 = df$AwayTeam)
+mean(abs(freq_expg$expg1 + freq_expg$expg2 - df$FTHG - df$FTAG))
+mean(abs(freq_expg$expg1 - freq_expg$expg2 - df$FTHG + df$FTAG))
+```
+
+## Trick
+```{r}
+test_test = sub_19_20
+implied_prob = implied_probabilities(test_test[, c('AvgCH', 'AvgCD', 'AvgCA')], 
+                                       method = 'basic')
+implied_expg = expg_from_probabilities(implied_prob$probabilities)
+test_test$xhg = implied_expg$expg[, 1]
+test_test$xag = implied_expg$expg[, 2]
+
+test_test$expg1 = rep(NA, nrow(test_test))
+test_test$expg2 = rep(NA, nrow(test_test))
+
+played_matches = 50
+upcoming_match_days = 33
+new_train_set = test_test[1:played_matches, ]
+
+for (i in 1:upcoming_match_days){
+  
+  #my_weights = weights_dc(as.Date(new_train_set$Date, format = '%d/%m/%Y'), xi=0.009*i)
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+  
+  new_match_day = test_test[lower_bound:upper_bound, ]
+  new_prob = implied_probabilities(new_match_day[, c('AvgH', 'AvgD', 'AvgA')], method = 'basic')
+  new_expg = expg_from_probabilities(new_prob$probabilities)
+  new_match_day$xhg = new_expg$expg[, 1]
+  new_match_day$xag = new_expg$expg[, 2]
+  
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+  model = goalmodel(goals1 = round(new_train_set$xhg), 
+                    goals2 = round(new_train_set$xag),
+                    team1 = new_train_set$HomeTeam, 
+                    team2 = new_train_set$AwayTeam,
+                    dc = F, model = 'gaussian', weights = NULL)
+  
+  new_pred = predict_expg(model, return_df = TRUE, 
+                          team1 = new_match_day$HomeTeam, 
+                          team2 = new_match_day$AwayTeam)
+  
+  test_test$expg1[lower_bound:upper_bound] = new_pred$expg1
+  test_test$expg2[lower_bound:upper_bound] = new_pred$expg2
+  
+  new_train_set = test_test[1:upper_bound, ]
+  
+}
+
+```
+
+```{r}
+mean(abs(test_test$expg1[51:380] + test_test$expg2[51:380] - test_test$FTHG[51:380] - test_test$FTAG[51:380]))
+mean(abs(test_test$expg1[51:380] - test_test$expg2[51:380] - test_test$FTHG[51:380] + test_test$FTAG[51:380]))
+
+mean(abs(round(test_test$expg1[51:380]) + round(test_test$expg2[51:380]) - test_test$FTHG[51:380] - test_test$FTAG[51:380]))
+mean(abs(round(test_test$expg1[51:380]) - round(test_test$expg2[51:380]) - test_test$FTHG[51:380] + test_test$FTAG[51:380]))
+```
+```{r}
+p_prob = implied_probabilities(test_test[, c('AvgH', 'AvgD', 'AvgA')], 
+                                       method = 'basic')
+o_expg = expg_from_probabilities(implied_prob$probabilities)
+test_test$xhg = implied_expg$expg[, 1]
+test_test$xag = implied_expg$expg[, 2]
+mean(abs(test_test$xhg[51:380] + test_test$xag[51:380] - test_test$FTHG[51:380] - test_test$FTAG[51:380]))
+mean(abs(test_test$xhg[51:380] - test_test$xag[51:380] - test_test$FTHG[51:380] + test_test$FTAG[51:380]))
+```
+
+```{r}
+
+```
+
+
+## Converting odds to expg
+
+```{r}
+ou_odds_to_prob = function(ou_odds, normalize=TRUE){
+  
+  stopifnot(all(ou_odds >= 1, na.rm=TRUE))
+  
+  if (!is.matrix(ou_odds)){
+    
+    if ('data.frame' %in% class(ou_odds)){
+      ou_odds = as.matrix(ou_odds)
+    } else {
+      ou_odds = matrix(ou_odds, nrow=1,
+                    dimnames = list(NULL, names(ou_odds)))
+    }
+  }
+  
+  # Prepare the list that will be returned.
+  out = vector(mode='list', length=2)
+  names(out) = c('probabilities', 'margin')
+  
+  # Some useful quantities
+  n_odds = nrow(ou_odds)
+  n_outcomes = ncol(ou_odds)
+  
+  # Inverted odds and margins
+  inverted_odds = 1 / ou_odds
+  inverted_odds_sum = rowSums(inverted_odds)
+  out$margin = inverted_odds_sum - 1
+
+  out$probabilities = inverted_odds / inverted_odds_sum
+    
+  ## do a final normalization to make sure the probabilities sum to 1 without rounding errors.
+  if (normalize){
+    out$probabilities = (1 * out$probabilities) / rowSums(out$probabilities)
+  }
+  
+  return(out)
+}
+```
+
+```{r}
+odds_to_prob = function(odds, normalize=TRUE){
+  
+  stopifnot(all(odds >= 1, na.rm=TRUE))
+  
+  if (!is.matrix(odds)){
+    
+    if ('data.frame' %in% class(odds)){
+      odds = as.matrix(odds)
+    } else {
+      odds = matrix(odds, nrow=1,
+                    dimnames = list(NULL, names(odds)))
+    }
+  }
+  
+  # Prepare the list that will be returned.
+  out = vector(mode='list', length=2)
+  names(out) = c('probabilities', 'margin')
+  
+  # Some useful quantities
+  n_odds = nrow(odds)
+  n_outcomes = ncol(odds)
+  
+  # Inverted odds and margins
+  inverted_odds = 1 / odds
+  inverted_odds_sum = rowSums(inverted_odds)
+  out$margin = inverted_odds_sum - 1
+
+  out$probabilities = inverted_odds / inverted_odds_sum
+    
+  ## do a final normalization to make sure the probabilities sum to 1 without rounding errors.
+  if (normalize){
+    out$probabilities = (1 * out$probabilities) / rowSums(out$probabilities)
+  }
+  
+  # Make sure the matrix of implied probabilities has column names.
+  if (!is.null(colnames(odds))){
+    colnames(out$probabilities) = colnames(odds)
+  }
+  
+  # check if there are any probabilities outside the 0-1 range.
+  problematic = apply(out$probabilities, MARGIN = 1, FUN=function(x){any(x > 1 | x < 0)})
+  problematic[is.na(problematic)] = TRUE
+  
+  if (any(problematic, na.rm=TRUE)){
+    warning(sprintf('Probabilities outside the 0-1 range produced at %d instances.\n',
+                    sum(problematic)))
+  }
+  
+  out$problematic = problematic
+  
+  return(out)
+}
+```
+
+```{r}
+ou_prob = ou_odds_to_prob(raw_19_20[, c('AvgC.2.5', 'AvgC.2.5.1')])$probabilities
+hda_prob = odds_to_prob(raw_19_20[, c('AvgCH', 'AvgCD', 'AvgCA')])$probabilities
+
+mis_prob = cbind(hda_prob, ou_prob)
+head(mis_prob)
+```
+
+```{r}
+mis_prob_sq_error = function(pars, trgt_probs){
+  
+  pars = exp(pars) # trick to avoid negative lambda parameters.
+  hda_ou_probs = numeric(5)
+  probmat = stats::dpois(0:49, lambda=pars[1]) %o% stats::dpois(0:49, lambda=pars[2])
+  
+  #1x2
+  hda_ou_probs[2] = sum(diag(probmat))
+  hda_ou_probs[1] = sum(probmat[lower.tri(probmat)])
+  hda_ou_probs[3] = 1 - sum(hda_ou_probs[1:2])
+  
+  #ou
+  total_goals = matrix(NA, nrow = 50, ncol = 50)
+  
+  for (i in 1:50){
+    for (j in 1:50){
+      total_goals[i, j] = (i-1) + (j-1)
+    }
+  }
+  
+  hda_ou_probs[4] = sum(probmat[total_goals > 2.5])
+  hda_ou_probs[5] = sum(probmat[total_goals < 2.5])
+  
+  sum((hda_ou_probs - trgt_probs)^2)
+  
+}
+```
+
+```{r}
+mis_prob_to_expg = function(probabilities){
+  
+  # Convert to matrix
+  if (!is.matrix(probabilities)){
+    if (is.numeric(probabilities)){
+      probabilities = matrix(probabilities, nrow=1,
+                              dimnames = list(NULL, names(probabilities)))
+    } else {
+      probabilities = as.matrix(probabilities)
+    }
+    
+    
+  }
+  
+  stopifnot(ncol(probabilities) == 5,
+            all(abs(rowSums(probabilities) - 1 - 1) < 0.0001))
+  
+  expg = matrix(ncol=2, nrow=nrow(probabilities))
+  sq_errors = numeric(nrow(probabilities))
+  
+  for (i in 1:nrow(probabilities)){
+    
+    optim_res = stats::optim(c(0,0), fn=mis_prob_sq_error,
+                              trgt_prob=probabilities[i,])
+    
+    expg[i,] = exp(optim_res$par)
+    sq_errors[i] = optim_res$value
+    
+  }
+  
+  out = list(expg = expg, sq_errors=sq_errors)
+  
+  return(out)
+}
+```
+
+```{r}
+mis_expg = mis_prob_to_expg(mis_prob)$expg
+```
+
+
+### pred
+
+```{r}
+
+```
+
+
+```{r}
+#source('Functions.R')
+prob_to_expg(odds_to_prob(sub_19_20[, c('AvgCH', 'AvgCD', 'AvgCA')])$probabilities)
+```
+
+### Bug fixing
+
+```{r}
+gm_fit_glm = function(goals1, goals2, team1, team2, all_teams, model,
+                      x1 = NULL, x2 = NULL,
+                      hfa = TRUE,  weights = NULL){
+  
+  # prepare some
+  n_teams = length(all_teams)
+  team1_stacked = c(team1, team2)
+  team2_stacked = c(team2, team1) # Opponent
+  
+  # Make response (y) vector
+  yy = c(goals1, goals2)
+  
+  # Attack dummy matrix
+  xmata = matrix(0, nrow=length(goals2)*2,
+                 ncol = (n_teams-1))
+  colnames(xmata) = all_teams[-1]
+  
+  # Defense dummy matrix
+  xmatd = matrix(0, nrow=length(goals2)*2,
+                 ncol = (n_teams-1))
+  colnames(xmatd) = all_teams[-1]
+  
+  for (ii in 2:n_teams){
+    
+    t1_idx = team1_stacked == all_teams[ii]
+    t2_idx = team2_stacked == all_teams[ii]
+    xmata[t1_idx, all_teams[ii]] = 1
+    xmatd[t2_idx, all_teams[ii]] = -1
+  }
+  
+  # Sum-to-zero constraint for the first team.
+  xmata[team1_stacked == all_teams[1]] = -1
+  xmatd[team2_stacked == all_teams[1]] = 1
+  
+  # Combine the attack and defence matrices.
+  colnames(xmata) = paste(colnames(xmata), 'Attack', sep='_')
+  colnames(xmatd) = paste(colnames(xmatd), 'Defense', sep='_')
+  
+  # Add home field advantage.
+  if (hfa){
+    xmat = cbind(intercept = 1, hfa = rep(1:0, each=length(goals2)),
+                 xmata, xmatd)
+  } else {
+    xmat = cbind(intercept = 1, xmata, xmatd)
+  }
+  
+  
+  if (model %in% c('poisson', 'negbin', 'cmp')){
+    # Note that a poisson model is fitted if model = 'negbin' or 'cmp'.
+    glm_family = stats::poisson(link='log')
+  } else if (model == 'gaussian'){
+    glm_family = stats::gaussian(link='log')
+  }
+  
+  if (is.null(weights)){
+    glm_res = stats::glm.fit(x=xmat, y=yy,
+                             start=c(mean(log(yy+0.5)-0.2), rep(0, ncol(xmat)-1)),
+                             family=glm_family,
+                             control = list(maxit=100, epsilon = 1e-9),
+                             intercept = FALSE)
+  } else {
+    glm_res = stats::glm.fit(x=xmat, y=yy,
+                             weights=rep(weights, 2),
+                             start=c(mean(log(yy+0.5)-0.2), rep(0, ncol(xmat)-1)),
+                             family=glm_family,
+                             control = list(maxit=100, epsilon = 1e-9),
+                             intercept = FALSE)
+  }
+  
+  attack_params = glm_res$coefficients[grepl('_Attack$', names(glm_res$coefficients))]
+  names(attack_params) = sub('_Attack$', '', names(attack_params))
+  attack_params = c(sum(attack_params)*-1, attack_params)
+  names(attack_params)[1] = all_teams[1]
+  
+  defense_params = glm_res$coefficients[grepl('_Defense$', names(glm_res$coefficients))]
+  names(defense_params) = sub('_Defense$', '', names(defense_params))
+  defense_params = c(sum(defense_params)*-1, defense_params)
+  names(defense_params)[1] = all_teams[1]
+  
+  param_list = list(attack = attack_params,
+                    defense = defense_params,
+                    intercept = glm_res$coefficients['intercept'])
+  
+  if (model == 'gaussian'){
+    param_list$sigma = stats::sd(glm_res$residuals)
+  }
+  
+  names(param_list$intercept) = NULL # The intercept vector should not be named.
+  
+  if (hfa){
+    param_list$hfa = glm_res$coefficients['hfa']
+    names(param_list$hfa) = NULL # The hfa vector should not be named.
+  }
+  
+  stopifnot(check_plist(param_list))
+  
+  # Compute the log-likelihood.
+  if (model %in% c('poisson', 'negbin', 'cmp')){
+    if (is.null(weights)){
+      loglik = sum(stats::dpois(x = c(goals1, goals2),
+                                lambda=glm_res$fitted.values, log=TRUE))
+    } else {
+      loglik = sum(stats::dpois(x = c(goals1, goals2),
+                                lambda=glm_res$fitted.values, log=TRUE)*rep(weights, 2))
+    }
+    
+  } else if (model == 'gaussian'){
+    if (is.null(weights)){
+      loglik = sum(stats::dnorm(x = c(goals1, goals2),
+                                mean=glm_res$fitted.values, log=TRUE))
+    } else {
+      loglik = sum(stats::dnorm(x = c(goals1, goals2),
+                                mean=glm_res$fitted.values, log=TRUE)*rep(weights,2))
+    }
+  }
+  
+  
+  return(list(parameters = param_list, loglikelihood=loglik,
+              npar_fixed = 0, npar_est = ncol(xmat), aic=glm_res$aic,
+              converged = glm_res$converged,
+              boundary = glm_res$boundary))
+  
+}
+```
+
+```{r}
+gm_fit_glm(current_season$xhg, current_season$xag, current_season$HomeTeam, current_season$AwayTeam, 
+           all_teams = current_season$HomeTeam, model = 'gaussian')
+```
+
+```{r}
+weights_dc = function(dates, xi=0, currentDate=NULL){
+  stopifnot(xi >= 0,
+            length(xi) == 1)
+  dates = as.Date(dates)
+  
+  if (is.null(currentDate)){
+    currentDate = max(dates)
+  } else {
+    currentDate = as.Date(currentDate)
+  }
+  
+  datediffs = dates - as.Date(currentDate)
+  datediffs = as.numeric(datediffs *-1)
+  w = exp(-1*xi*datediffs)
+  #w[datediffs < 0] = 0 #Future dates should have zero weights
+  return(w)
+}
+```
+
+```{r}
+plot(weights_dc(as.Date(current_season$Date, format = '%d/%m/%Y'), xi=0.02))
+as.Date(current_season$Date, format = '%d/%m/%Y') - max(as.Date(current_season$Date, format = '%d/%m/%Y'))
+```
+
+```{r}
+plot(c(1:380), pred$xhg+pred$xag)
+plot(c(1:380), pred$FTHG+pred$FTAG)
+plot(c(1:380), pred$FTHG-pred$FTAG)
+```
+
+
+```{r}
+expg_model = function(goals1, goals2, team1, team2,
+                      x1 = NULL, x2 = NULL,
+                      hfa = TRUE, dc = FALSE, rs = FALSE, hurdle = FALSE,
+                      fixed_params = NULL, weights = NULL,
+                      model, optim_method='BFGS'){
+  
+  warning_messages = c()
+  
+  stopifnot(length(goals1) == length(goals2),
+            length(goals2) == length(team1),
+            length(team1) == length(team2),
+            length(goals1) >= 1,
+            is.numeric(goals1), is.numeric(goals2),
+            model %in% c('poisson', 'negbin', 'gaussian', 'cmp'))
+  
+  
+  if (!is_connected(cbind(team1, team2))){
+    wm_tmp = 'The data contains two or more separate clusters of teams that are not comparable. The results may be unreliable.'
+    warning_messages = append(warning_messages, wm_tmp)
+    warning(wm_tmp)
+  }
+  
+  
+  if (!is.null(weights)){
+    stopifnot(is.numeric(weights),
+              length(goals1)==length(weights),
+              all(weights >= 0),
+              all(!is.na(weights)),
+              !all(weights == 0))
+  }
+  
+  
+  # Make sure the team vectors are of the character type.
+  team1 = as.character(team1)
+  team2 = as.character(team2)
+  
+  # Some useful quantities.
+  all_teams = sort(unique(c(unique(team1), unique(team2))), decreasing = FALSE)
+  n_teams = length(all_teams)
+  ngames = length(goals1)
+  
+  # If it is sufficient to fit the model with glm.fit().
+  mdefault = model %in% c('poisson', 'gaussian') & dc == FALSE & rs == FALSE & hurdle == FALSE & is.null(fixed_params)
+  
+  fitter = ifelse(mdefault, 'glm.fit', 'gm')
+  
+  # Fit a model with glm.fit. Some model classes are compatible with this function.
+  # If not, the results from fitting this simples model is used as starting values.
+  
+  # TODO: If all attack and defence and hfa and intercept are fixed, this is not
+  # needed for fitting the rest of the models. This step should be skiped
+  # to save computing time.
+  
+  # TODO: Maybe even negbin models can be fitted with this approach, with
+  # the glm.nb() function from the MASS pacakge.
+  
+  start_time = Sys.time()
+  
+  gm_fit_glm_res = gm_fit_glm(goals1=goals1, goals2=goals2,
+                              team1=team1, team2=team2,
+                              all_teams = all_teams,
+                              model = model,
+                              weights = weights,
+                              x1 = x1, x2=x2, hfa=hfa)
+  
+  
+  if (mdefault){
+    
+    if (!gm_fit_glm_res$converged){
+      wm_tmp = 'Did not converge (glm.fit). Parameter estimates are unreliable.'
+      warning_messages = append(warning_messages, wm_tmp)
+      warning(wm_tmp)
+    }
+    
+    if (gm_fit_glm_res$boundary){
+      wm_tmp = 'glm.fit(): Fitted values on the boundary of the attainable values. Parameter estimates are unreliable.'
+      warning_messages = append(warning_messages, wm_tmp)
+      warning(wm_tmp)
+    }
+    
+    parameter_list = gm_fit_glm_res$parameters
+    loglikelihood = gm_fit_glm_res$loglikelihood
+    npar_est = gm_fit_glm_res$npar_est
+    npar_fixed = gm_fit_glm_res$npar_fixed
+    aic = gm_fit_glm_res$aic
+    converged = gm_fit_glm_res$converged
+    
+  } else {
+    
+    # initial values from gm_fit_glm_res.
+    parameter_list_init = gm_fit_glm_res$parameters
+    parameter_list_init$attack = parameter_list_init$attack[-1]
+    parameter_list_init$defense = parameter_list_init$defense[-1]
+    
+    # Add additional initial values.
+    if (dc){
+      parameter_list_init$rho = 0.01
+    }
+    
+    if (rs){
+      parameter_list_init$gamma = 0.0
+    }
+    
+    if (hurdle){
+      parameter_list_init$hurdle = 0.0
+    }
+    
+    if (model == 'negbin'){
+      # on log scale during estimation.
+      # start with a value close to 0, which is almost Poisson.
+      parameter_list_init$dispersion = -10
+    }
+    
+    if (model == 'gaussian'){
+      # on log scale during estimation.
+      parameter_list_init$sigma = log(parameter_list_init$sigma)
+    }
+    
+    if (model == 'cmp'){
+      # on log scale during estimation.
+      # start with a value exp(0)=1, which is the same as Poisson.
+      parameter_list_init$dispersion = 0
+    }
+    
+    # Deal with fixed parameters.
+    if (!is.null(fixed_params)){
+      
+      stopifnot(is.list(fixed_params))
+      
+      if (any(!names(fixed_params) %in% c('attack', 'defense', 'beta', 'intercept',
+                                          'sigma', 'rho', 'dispersion', 'gamma', 'hfa'))){
+        stop('In fixed_params: Invalid parameter name.')
+      }
+      
+      # remove fixed parameters from the parameter_list_init, since they are
+      # not optimized over.
+      if ('attack' %in% names(fixed_params)){
+        fixed_attack_params = names(parameter_list_init$attack) %in% names(fixed_params$attack)
+        parameter_list_init$attack = parameter_list_init$attack[!fixed_attack_params]
+      }
+      
+      if ('defense' %in% names(fixed_params)){
+        fixed_defence_params = names(parameter_list_init$defense) %in% names(fixed_params$defense)
+        parameter_list_init$defense = parameter_list_init$defense[!fixed_defence_params]
+      }
+      
+      # remove the parameters that are not attack aand defence parameters.
+      if (any(!names(fixed_params) %in% c('attack', 'defense'))){
+        
+        parameter_list_init[names(fixed_params)] = NULL
+        
+        if ('dispersion' %in% names(fixed_params)){
+          # During estimation, the dispersion parameter is on the log scale
+          # to avoid negative values.
+          fixed_params$dispersion = log(fixed_params$dispersion)
+          
+          if (model == 'poisson'){
+            wm_tmp = 'Dispersion parameter is fixed, but model is Poisson. The dispersion parameter will not have an effect.'
+            warning_messages = append(warning_messages, wm_tmp)
+            warning(wm_tmp)
+          } else if (model == 'gaussian'){
+            wm_tmp = 'Dispersion parameter is fixed, but model is Gaussian The dispersion parameter will not have an effect. The related parameter for the Gaussian model is sigma.'
+            warning_messages = append(warning_messages, wm_tmp)
+            warning(wm_tmp)
+          }
+        }
+      }
+      
+    } # end fixed params
+    
+    # Commence estimation.
+    parameter_vector = unlist(parameter_list_init)
+    
+    optim_res = stats::optim(par = parameter_vector, fn=negloglik,
+                             goals1 = goals1, goals2 = goals2,
+                             team1=team1, team2=team2,
+                             x1 = x1, x2 = x2,
+                             fixed_params=fixed_params,
+                             model = model,
+                             all_teams = all_teams,
+                             param_skeleton=parameter_list_init,
+                             weights = weights,
+                             method = optim_method,
+                             control = list(maxit = 250))
+    
+    converged = optim_res$convergence == 0
+    
+    if (!converged){
+      wm_tmp = 'Did not converge (optim). Parameter estimates are unreliable.'
+      warning_messages = append(warning_messages, wm_tmp)
+      warning(wm_tmp)
+    }
+    
+    # relist the parameter vector, calculate the missing attack and defense parameter.
+    parameter_list_est = utils::relist(optim_res$par, parameter_list_init)
+    
+    if (length(parameter_list_est$defense) != 0){
+      # TODO: There is probably a bug here, if there is only one parameter that
+      # is not fixed. Also in the negloglik() function.
+      
+      # if 0, then all defense parameters are presumably fixed.
+      parameter_list_est$defense = c(sum(parameter_list_est$defense)*-1, parameter_list_est$defense)
+      names(parameter_list_est$defense)[1] = all_teams[1]
+    }
+    
+    if (length(parameter_list_est$attack) != 0){
+      # if 0, then all attack parameters are presumably fixed.
+      parameter_list_est$attack = c(sum(parameter_list_est$attack)*-1, parameter_list_est$attack)
+      names(parameter_list_est$attack)[1] = all_teams[1]
+    }
+    
+    loglikelihood = optim_res$value*-1
+    npar_est = length(optim_res$par)
+    npar_fixed = length(unlist(fixed_params))
+    aic = npar_est*2 - 2*loglikelihood
+    
+    # rescale dispersion
+    if ('dispersion' %in% names(parameter_list_est)){
+      parameter_list_est$dispersion = exp(parameter_list_est$dispersion)
+    }
+    
+    # rescale sigma
+    if ('sigma' %in% names(parameter_list_est)){
+      parameter_list_est$sigma = exp(parameter_list_est$sigma)
+    }
+    
+    # rescale hurlde parameter
+    if ('hurdle' %in% names(parameter_list_est)){
+      parameter_list_est$hudrle = exp(parameter_list_est$hurdle)
+    }
+    
+    # Add the fixed parameters to the parameter list.
+    parameter_list = fill_fixed_params(parameter_list_est, fixed_params = fixed_params)
+    
+  }
+  
+  end_time = Sys.time()
+  est_time = difftime(end_time, start_time, units='secs')
+  
+  # Compute R squared.
+  all_goals = c(goals1, goals2)
+  if (is.null(weights)){
+    mean_goals = mean(all_goals)
+  } else {
+    mean_goals = stats::weighted.mean(all_goals, w = rep(weights, 2))
+  }
+  
+  
+  ## Deviances needed for R squared.
+  if (model == 'poisson'){
+    if (is.null(weights)){
+      loglikelihood_saturated = sum(stats::dpois(all_goals, lambda = all_goals, log=TRUE))
+      loglikelihood_null = sum(stats::dpois(all_goals, lambda = mean_goals, log=TRUE))
+    } else {
+      loglikelihood_saturated = sum(stats::dpois(all_goals, lambda = all_goals, log=TRUE)*rep(weights,2))
+      loglikelihood_null = sum(stats::dpois(all_goals, lambda = mean_goals, log=TRUE)*rep(weights,2))
+    }
+    
+  }  else if (model == 'gaussian'){
+    if (is.null(weights)){
+      sigma0_tmp = stats::sd(all_goals)
+      loglikelihood_saturated = sum(stats::dnorm(all_goals, mean = all_goals, sd=sigma0_tmp, log=TRUE))
+      loglikelihood_null = sum(stats::dnorm(all_goals, mean = mean_goals, sd=sigma0_tmp, log=TRUE))
+    } else {
+      sigma0_tmp = sqrt(sum(rep(weights, 2) * (all_goals - mean_goals)^2))
+      loglikelihood_saturated = sum(stats::dnorm(all_goals, mean = all_goals, sd=sigma0_tmp, log=TRUE)*rep(weights,2))
+      loglikelihood_null = sum(stats::dnorm(all_goals, mean = mean_goals, sd=sigma0_tmp, log=TRUE)*rep(weights,2))
+    }
+  } 
+  
+  # TODO: How should deviances and R^2 be computed in the Dixon-Coles model?
+  
+  deviance = 2 * (loglikelihood_saturated - loglikelihood)
+  deviance_null = 2 * (loglikelihood_saturated - loglikelihood_null)
+  
+  r_squared = 1 - (deviance / deviance_null)
+  
+  
+  # Update the all_teams variable to include teams not in data, but with
+  # fixed parameters.
+  all_param_teams = unique(c(names(parameter_list$defense), names(parameter_list$attack)))
+  if (any(!all_param_teams %in% all_teams)){
+    all_teams = sort(all_param_teams)
+  }
+  
+  # sort the attack and defence parameters alphabetically
+  parameter_list$defense = parameter_list$defense[order(names(parameter_list$defense))]
+  parameter_list$attack = parameter_list$attack[order(names(parameter_list$attack))]
+  
+  
+  if (any(is.na(unlist(parameter_list)))){
+    wm_tmp = 'Some parameters are NA.'
+    warning_messages = append(warning_messages, wm_tmp)
+    warning(wm_tmp)
+  }
+  
+  # maxgoal. Useful for later predictions.
+  maxgoal = max(all_goals)
+  
+  out = list(parameters = parameter_list,
+             loglikelihood = loglikelihood, npar_est=npar_est,
+             npar_fixed = npar_fixed, aic=aic, r_squared=r_squared,
+             all_teams = all_teams, ngames = ngames,
+             est_time = est_time, model = model,
+             fixed_params = fixed_params,
+             converged = converged,
+             maxgoal = maxgoal,
+             fitter = fitter,
+             warnings = warning_messages)
+  
+  class(out) = 'goalmodel'
+  
+  return(out)
+  
+}
+```
+
+```{r}
+expg_model(current_season$xhg, current_season$xag, current_season$HomeTeam, current_season$AwayTeam,
+           model = 'gaussian')$parameters
+```
+
+```{r}
+expg_model(current_season$xhg, current_season$xag, current_season$HomeTeam, current_season$AwayTeam,
+           model = 'gaussian', weights = weights_dc(as.Date(current_season$Date, format = '%d/%m/%Y'), xi=0.02))$parameters
+```
+
+```{r}
+x <-c(rnorm(10),NA)
+df <- data.frame(y=1+2*x+rnorm(11)/2, x=x, wght1=1:11)
+
+## Fancy weights as numeric vector
+summary(lm(y~x,data=df,weights=(df$wght1)^(3/4))) 
+
+# Fancy weights as formula on column of the data set
+summary(lm(y~x,data=df,weights=I(wght1^(3/4))))
+
+# Mundane weights as the column of the data set
+summary(lm(y~x,data=df,weights=wght1))
+```
+```{r}
+plot(df$x, df$y)
+```
+
+
