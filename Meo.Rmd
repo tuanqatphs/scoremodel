@@ -380,3 +380,17 @@ fbref_data = fbref_data[order(as.Date(fbref_data$Date, format = "%d/%m/%Y")), ]
 fbref_data
 ```
 
+1/ In the Some Functions section
+
+Instead of using the 1X2 odds to convert to expected goals, I use both 1X2 and OU (over/under) odds to calculate the expected goals. I just use your way to calculate it, except I deleted some codes for simplification.
+
+2/ In the Some preparations section
+
+Since the model can't predict the very first matches in a season because there are 3 new teams that didn't play on the last season, my idea is just simply replace the names of the 3 dropped teams by the names of the 3 new teams so that we can predict all matches in a season.
+
+3/ In the Modelling section
+
+I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually 10 matches are played 
+
+
+
