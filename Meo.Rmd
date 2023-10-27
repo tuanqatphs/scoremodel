@@ -392,5 +392,7 @@ Since the model can't predict the very first matches in a season because there a
 
 I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually 10 matches are played 
 
+4/ Why to compute the log-link functions?
+
 
 
