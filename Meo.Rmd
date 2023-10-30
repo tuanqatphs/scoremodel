@@ -398,10 +398,15 @@ I only use the last season data to predict the first 50 matches in the new seaso
 
 https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit?usp=sharing
 
-2/ How does the weight computed from the weight_dc() function actually do?
+2/ How does the weights computed from the weight_dc() function actually work in Gaussian model?
 
 I read your articles about it here but I haven't understood to be honest. Could you explain to me in another simpler way or suggest me other sources that I should read or watch?
 
+https://opisthokonta.net/?p=890 1
+https://opisthokonta.net/?p=913 2
+https://opisthokonta.net/?p=927 3
+https://opisthokonta.net/?p=939 4
+https://opisthokonta.net/?p=1013 (weight)
 
 From the file goalmodel_fit.R, line 419, you place the DC weights to the weights argument. It's like weighted least squares for me, is it related?
 
