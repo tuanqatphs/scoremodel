@@ -379,20 +379,35 @@ row.names(fbref_data) = c(1:380)
 fbref_data = fbref_data[order(as.Date(fbref_data$Date, format = "%d/%m/%Y")), ]
 fbref_data
 ```
+1/ Using both 1X2 and OU odds to convert to expected goals
 
-1/ In the Some Functions section
+Instead of only using HDA odds (1X2) to convert to expected goals, I use both 1X2 and OU (over/under) odds to calculate the expected goals. To save your time, I attached some R codes so that you can just run and see the results. Let me know how you think about it. Below is the summary of the code:
 
-Instead of using the 1X2 odds to convert to expected goals, I use both 1X2 and OU (over/under) odds to calculate the expected goals. I just use your way to calculate it, except I deleted some codes for simplification.
+1a/ In the Some Functions section
 
-2/ In the Some preparations section
+I just wrote one more function which converts OU odds to OU probabilities then use your way to calculate it (to minimise the sum squared error), except that I deleted some codes for simplification.
+I still got an error from the score_predictions() function although I remember that you fixed it and it worked last time. I again turned the any(observed <= ncat) condition off.
+
+2b/ In the Some preparations section
 
 Since the model can't predict the very first matches in a season because there are 3 new teams that didn't play on the last season, my idea is just simply replace the names of the 3 dropped teams by the names of the 3 new teams so that we can predict all matches in a season.
 
-3/ In the Modelling section
+3c/ In the Modelling section
 
-I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually 10 matches are played 
+I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually we have 10 matches in a matchday. Also, apart from using log/brier/rps score as our metrics, I tried mean absolute error of the home goal, away goal as well as GE (total goals) and SUP (goal diffference) as metrics. I expected the results (below) should agree with each other but they actually don't.
+
+https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit?usp=sharing
+
+2/ How does the weight computed from the weight_dc() function actually do?
+
+I read your articles about it here but I haven't understood to be honest. Could you explain to me in another simpler way or suggest me other sources that I should read or watch?
+
+
+From the file goalmodel_fit.R, line 419, you place the DC weights to the weights argument. It's like weighted least squares for me, is it related?
 
 4/ Why to compute the log-link functions?
+5/ Why doesn't rounding work?
+
 
 
 
