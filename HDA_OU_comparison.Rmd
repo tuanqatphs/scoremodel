@@ -1,0 +1,678 @@
+# Libraries
+
+```{r}
+library(goalmodel)
+```
+
+# Data
+
+```{r}
+epl_19_20 = read.csv('https://www.football-data.co.uk/mmz4281/1920/E0.csv')
+epl_20_21 = read.csv('https://www.football-data.co.uk/mmz4281/2021/E0.csv')
+epl_21_22 = read.csv('https://www.football-data.co.uk/mmz4281/2122/E0.csv')
+epl_22_23 = read.csv('https://www.football-data.co.uk/mmz4281/2223/E0.csv')
+
+features = c('Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR',
+             'AvgCH', 'AvgCD', 'AvgCA', 'AvgC.2.5', 'AvgC.2.5.1')
+
+epl_19_20 = epl_19_20[, features]
+epl_20_21 = epl_20_21[, features]
+epl_21_22 = epl_21_22[, features]
+epl_22_23 = epl_22_23[, features]
+```
+
+# Some Functions
+
+```{r}
+hda_odds_to_prob = function(hda_odds, normalize=TRUE){
+  
+  stopifnot(all(hda_odds >= 1, na.rm=TRUE))
+  
+  if (!is.matrix(hda_odds)){
+    
+    if ('data.frame' %in% class(hda_odds)){
+      hda_odds = as.matrix(hda_odds)
+    } else {
+      hda_odds = matrix(hda_odds, nrow=1,
+                    dimnames = list(NULL, names(hda_odds)))
+    }
+  }
+  
+  # Prepare the list that will be returned.
+  out = vector(mode='list', length=2)
+  names(out) = c('probabilities', 'margin')
+  
+  # Some useful quantities
+  n_odds = nrow(hda_odds)
+  n_outcomes = ncol(hda_odds)
+  
+  # Inverted hda_odds and margins
+  inverted_odds = 1 / hda_odds
+  inverted_odds_sum = rowSums(inverted_odds)
+  out$margin = inverted_odds_sum - 1
+  
+  out$probabilities = inverted_odds / inverted_odds_sum
+  
+  ## do a final normalization to make sure the probabilities sum to 1 without rounding errors.
+  if (normalize){
+    out$probabilities = (1 * out$probabilities) / rowSums(out$probabilities)
+  }
+  
+  # Make sure the matrix of implied probabilities has column names.
+  if (!is.null(colnames(hda_odds))){
+    colnames(out$probabilities) = colnames(hda_odds)
+  }
+  
+  # check if there are any probabilities outside the 0-1 range.
+  problematic = apply(out$probabilities, MARGIN = 1, FUN=function(x){any(x > 1 | x < 0)})
+  problematic[is.na(problematic)] = TRUE
+  
+  if (any(problematic, na.rm=TRUE)){
+    warning(sprintf('Probabilities outside the 0-1 range produced at %d instances.\n',
+                    sum(problematic)))
+  }
+  
+  out$problematic = problematic
+  
+  return(out)
+}
+```
+
+```{r}
+ou_odds_to_prob = function(ou_odds, normalize=TRUE){
+  
+  stopifnot(all(ou_odds >= 1, na.rm=TRUE))
+  
+  if (!is.matrix(ou_odds)){
+    
+    if ('data.frame' %in% class(ou_odds)){
+      ou_odds = as.matrix(ou_odds)
+    } else {
+      ou_odds = matrix(ou_odds, nrow=1,
+                       dimnames = list(NULL, names(ou_odds)))
+    }
+  }
+  
+  # Prepare the list that will be returned.
+  out = vector(mode='list', length=2)
+  names(out) = c('probabilities', 'margin')
+  
+  # Some useful quantities
+  n_odds = nrow(ou_odds)
+  n_outcomes = ncol(ou_odds)
+  
+  # Inverted odds and margins
+  inverted_odds = 1 / ou_odds
+  inverted_odds_sum = rowSums(inverted_odds)
+  out$margin = inverted_odds_sum - 1
+  
+  out$probabilities = inverted_odds / inverted_odds_sum
+  
+  ## do a final normalization to make sure the probabilities sum to 1 without rounding errors.
+  if (normalize){
+    out$probabilities = (1 * out$probabilities) / rowSums(out$probabilities)
+  }
+  
+  return(out)
+}
+```
+
+```{r}
+mis_prob_sq_error = function(pars, trgt_probs){
+  
+  pars = exp(pars) # trick to avoid negative lambda parameters.
+  hda_ou_probs = numeric(5)
+  probmat = stats::dpois(0:49, lambda=pars[1]) %o% stats::dpois(0:49, lambda=pars[2])
+  
+  #1x2
+  hda_ou_probs[2] = sum(diag(probmat))
+  hda_ou_probs[1] = sum(probmat[lower.tri(probmat)])
+  hda_ou_probs[3] = 1 - sum(hda_ou_probs[1:2])
+  
+  #ou
+  total_goals = matrix(NA, nrow = 50, ncol = 50)
+  
+  for (i in 1:50){
+    for (j in 1:50){
+      total_goals[i, j] = (i-1) + (j-1)
+    }
+  }
+  
+  hda_ou_probs[4] = sum(probmat[total_goals > 2.5])
+  hda_ou_probs[5] = sum(probmat[total_goals < 2.5])
+  
+  sum((hda_ou_probs - trgt_probs)^2)
+  
+}
+```
+
+```{r}
+mis_prob_to_expg = function(probabilities){
+  
+  # Convert to matrix
+  if (!is.matrix(probabilities)){
+    if (is.numeric(probabilities)){
+      probabilities = matrix(probabilities, nrow=1,
+                             dimnames = list(NULL, names(probabilities)))
+    } else {
+      probabilities = as.matrix(probabilities)
+    }
+    
+    
+  }
+  
+  stopifnot(ncol(probabilities) == 5,
+            all(abs(rowSums(probabilities) - 1 - 1) < 0.0001))
+  
+  expg = matrix(ncol=2, nrow=nrow(probabilities))
+  sq_errors = numeric(nrow(probabilities))
+  
+  for (i in 1:nrow(probabilities)){
+    
+    optim_res = stats::optim(c(0,0), fn=mis_prob_sq_error,
+                             trgt_prob=probabilities[i,])
+    
+    expg[i,] = exp(optim_res$par)
+    sq_errors[i] = optim_res$value
+    
+  }
+  
+  out = list(expg = expg, sq_errors=sq_errors)
+  
+  return(out)
+}
+```
+
+```{r}
+score_predictions <- function(predictions, observed, score){
+
+
+  scorefunctions <- c('log', 'brier', 'rps')
+  stopifnot(is.character(score),
+            length(score) >= 1)
+
+  score <- tolower(score)
+
+  if (!all(score %in% scorefunctions)){
+    stop('score must be one of brier, log or rps.')
+  }
+
+  # Some useful quantities.
+  ncat <- ncol(predictions)
+  npred <- nrow(predictions)
+
+  if (is.numeric(observed)){
+    stopifnot(any(observed >= 1),
+              #any(observed <= ncat),
+              length(observed) == npred)
+  } else if (is.character(observed)){
+    stopifnot(any(observed %in% colnames(predictions)))
+  }
+
+  if (is.character(observed)){
+    observed <- match(observed, colnames(predictions))
+  }
+
+  # Output list.
+  res <- list()
+
+  # Expand observed vector to indicator matrix of the same
+  # dimensions as the predictions matrix.
+  obsmat <- matrix(0, ncol=ncat, nrow=npred)
+  for (rr in 1:npred){
+    obsmat[rr, observed[rr]] <- 1
+  }
+
+
+  # Logarithmic scoring rule
+  if ('log' %in% score){
+    log_scores <- numeric(npred)
+    for (rr in 1:npred){
+      log_scores[rr] <- -log(predictions[rr,observed[rr]])
+    }
+
+    res$log <- log_scores
+
+  }
+
+
+  if ('brier' %in% score){
+    res$brier <- rowSums((predictions - obsmat)^2)
+  }
+
+
+  # Ranked Probability Score. (RPS).
+  if ('rps' %in% score){
+    rankprobscore <- numeric(npred)
+
+    for (rr in 1:npred){
+      cumulative <- 0
+      for (i in 1:ncat){
+        cumulative <- cumulative + (sum(predictions[rr,1:i]) - sum(obsmat[rr, 1:i]))^2
+      }
+      rankprobscore[rr] <- (1/(ncat-1))*cumulative
+    }
+
+    res$rps <- rankprobscore
+
+  }
+
+  return(res)
+
+}
+```
+
+# Some preparations
+
+```{r}
+## last season
+last_season = epl_20_21
+
+## hda and ou
+last_season_hda_prob = hda_odds_to_prob(last_season[, c('AvgCH', 'AvgCD', 'AvgCA')])$probabilities
+last_season_ou_prob = ou_odds_to_prob(last_season[, c('AvgC.2.5', 'AvgC.2.5.1')])$probabilities
+
+last_season_hdaou_prob = cbind(last_season_hda_prob, last_season_ou_prob)
+last_season_hdaou_expg = mis_prob_to_expg(last_season_hdaou_prob)
+
+last_season$hdaou_xhg = last_season_hdaou_expg$expg[, 1]
+last_season$hdaou_xag = last_season_hdaou_expg$expg[, 2]
+
+## hda
+last_season_hda_expg = expg_from_probabilities(last_season_hda_prob)
+
+last_season$hda_xhg = last_season_hda_expg$expg[, 1]
+last_season$hda_xag = last_season_hda_expg$expg[, 2]
+
+## current season
+current_season = epl_21_22
+
+## hda and ou
+current_season_hda_prob = hda_odds_to_prob(current_season[, c('AvgCH', 'AvgCD', 'AvgCA')])$probabilities
+current_season_ou_prob = ou_odds_to_prob(current_season[, c('AvgC.2.5', 'AvgC.2.5.1')])$probabilities
+
+current_season_hdaou_prob = cbind(current_season_hda_prob, current_season_ou_prob)
+current_season_hdaou_expg = mis_prob_to_expg(current_season_hdaou_prob)
+
+current_season$hdaou_xhg = current_season_hdaou_expg$expg[, 1]
+current_season$hdaou_xag = current_season_hdaou_expg$expg[, 2]
+
+## hda
+current_season_hda_expg = expg_from_probabilities(current_season_hda_prob)
+
+current_season$hda_xhg = current_season_hda_expg$expg[, 1]
+current_season$hda_xag = current_season_hda_expg$expg[, 2]
+```
+
+```{r}
+current_season$result = rep(NA, 380)
+
+for (i in 1:380){
+  
+  if (current_season$FTR[i] == 'H'){
+    current_season$result[i] = 'p1'
+  }
+  if (current_season$FTR[i] == 'D'){
+    current_season$result[i] = 'pd'
+  }
+  if (current_season$FTR[i] == 'A'){
+    current_season$result[i] = 'p2'
+  }
+  
+}
+
+last_season$result = rep(NA, 380)
+
+for (i in 1:380){
+  
+  if (last_season$FTR[i] == 'H'){
+    last_season$result[i] = 'p1'
+  }
+  if (last_season$FTR[i] == 'D'){
+    last_season$result[i] = 'pd'
+  }
+  if (last_season$FTR[i] == 'A'){
+    last_season$result[i] = 'p2'
+  }
+  
+}
+```
+
+```{r}
+current_season_teams = unique(current_season$HomeTeam)
+last_season_teams = unique(last_season$HomeTeam)
+
+new_teams = current_season_teams[!(current_season_teams %in% last_season_teams)]
+dropped_teams = last_season_teams[!(last_season_teams %in% current_season_teams)] 
+```
+
+```{r}
+replaced_last_season = last_season
+
+for (i in 1:length(new_teams)){
+  
+  replaced_last_season$HomeTeam[replaced_last_season$HomeTeam == dropped_teams[i]] = new_teams[i]
+  replaced_last_season$AwayTeam[replaced_last_season$AwayTeam == dropped_teams[i]] = new_teams[i]
+  
+}
+
+replaced_last_season_teams = unique(replaced_last_season$HomeTeam)
+```
+
+
+# Modelling using HDA
+
+## The first 50s
+
+```{r}
+first_preds = current_season[1:50, ]
+
+first_preds$p1 = rep(NA, 50)
+first_preds$pd = rep(NA, 50)
+first_preds$p2 = rep(NA, 50)
+
+first_preds$expg1 = rep(NA, 50)
+first_preds$expg2 = rep(NA, 50)
+
+## HDA
+new_train_set = replaced_last_season
+
+for (i in 1:5){
+  
+  #i = 1
+  replaced_model = goalmodel(goals1 = round(new_train_set$hda_xhg), goals2 = round(new_train_set$hda_xag),
+                             team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam,
+                             model = 'poisson')
+  lower_bound = 1 + (i-1)*10
+  upper_bound = i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  # probability
+  pred = predict_result(replaced_model, return_df = T,
+                        team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                        team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$p1[lower_bound:upper_bound] = pred$p1
+  first_preds$pd[lower_bound:upper_bound] = pred$pd
+  first_preds$p2[lower_bound:upper_bound] = pred$p2
+  
+  # goal
+  pred = predict_expg(replaced_model, return_df = T,
+                      team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                      team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$hda_expg1[lower_bound:upper_bound] = pred$expg1
+  first_preds$hda_expg2[lower_bound:upper_bound] = pred$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day) 
+  
+}
+```
+
+## The rest
+
+```{r}
+pred = current_season
+
+pred$p1 = rep(NA, 380)
+pred$pd = rep(NA, 380)
+pred$p2 = rep(NA, 380)
+
+pred$hda_expg1 = rep(NA, 380)
+pred$hda_expg2 = rep(NA, 380)
+
+played_matches = 50
+
+new_train_set = current_season[1:played_matches, ]
+
+for (i in 1:33){
+  
+  model_xg = goalmodel(goals1 = round(new_train_set$hda_xhg), goals2 = round(new_train_set$hda_xag),
+                       team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, 
+                       model = 'poisson')
+  
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  # probability
+  pred_xg = predict_result(model_xg, return_df = T,
+                          team1 = new_match_day$HomeTeam, 
+                          team2 = new_match_day$AwayTeam)
+  
+  pred$p1[lower_bound:upper_bound] = pred_xg$p1
+  pred$pd[lower_bound:upper_bound] = pred_xg$pd
+  pred$p2[lower_bound:upper_bound] = pred_xg$p2
+  
+  # goal
+  pred_xg = predict_expg(model_xg, return_df = T,
+                         team1 = new_match_day$HomeTeam, 
+                         team2 = new_match_day$AwayTeam)
+  
+  pred$hda_expg1[lower_bound:upper_bound] = pred_xg$expg1
+  pred$hda_expg2[lower_bound:upper_bound] = pred_xg$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+}
+```
+
+```{r}
+pred$p1[1:50] = first_preds$p1
+pred$pd[1:50] = first_preds$pd
+pred$p2[1:50] = first_preds$p2
+
+pred$hda_expg1[1:50] = first_preds$hda_expg1
+pred$hda_expg2[1:50] = first_preds$hda_expg2
+```
+
+## Evaluation
+
+### probabilistic
+```{r}
+# whole
+hda_prediction_scores = score_predictions(predictions = pred[, c('p1','pd','p2')],
+                                          observed = pred$result,
+                                          score = c('log', 'brier', 'rps'))
+sum(hda_prediction_scores$log)
+sum(hda_prediction_scores$brier)
+sum(hda_prediction_scores$rps)
+```
+
+```{r}
+# 51 - 380
+hda_prediction_scores = score_predictions(predictions = pred[, c('p1','pd','p2')],
+                                          observed = pred$result,
+                                          score = c('log', 'brier', 'rps'))
+sum(hda_prediction_scores$log[51:380])
+sum(hda_prediction_scores$brier[51:380])
+sum(hda_prediction_scores$rps[51:380])
+```
+### mae
+
+```{r}
+# whole
+mean(abs(pred$hda_expg1 - pred$FTHG))
+mean(abs(pred$hda_expg2 - pred$FTAG))
+
+mean(abs(pred$hda_expg1 + pred$hda_expg2 - pred$FTHG - pred$FTAG))
+mean(abs(pred$hda_expg1 - pred$hda_expg2 - pred$FTHG + pred$FTAG))
+```
+
+```{r}
+# 51 - 380
+mean(abs(pred$hda_expg1[51:380] - pred$FTHG[51:380]))
+mean(abs(pred$hda_expg2[51:380] - pred$FTAG[51:380]))
+
+mean(abs(pred$hda_expg1[51:380] + pred$hda_expg2[51:380] - pred$FTHG[51:380] - pred$FTAG[51:380]))
+mean(abs(pred$hda_expg1[51:380] - pred$hda_expg2[51:380] - pred$FTHG[51:380] + pred$FTAG[51:380]))
+```
+
+# Modelling using HDA and OU
+
+## The first 50s
+
+```{r}
+first_preds = current_season[1:50, ]
+
+first_preds$p1 = rep(NA, 50)
+first_preds$pd = rep(NA, 50)
+first_preds$p2 = rep(NA, 50)
+
+first_preds$hdaou_expg1 = rep(NA, 50)
+first_preds$hdaou_expg2 = rep(NA, 50)
+
+## HDA + OU
+new_train_set = replaced_last_season
+
+for (i in 1:5){
+  
+  #i = 1
+  replaced_model = goalmodel(goals1 = round(new_train_set$hdaou_xhg), goals2 = round(new_train_set$hdaou_xag),
+                             team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam,
+                             model = 'poisson')
+  lower_bound = 1 + (i-1)*10
+  upper_bound = i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  # probability
+  pred = predict_result(replaced_model, return_df = T,
+                        team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                        team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$p1[lower_bound:upper_bound] = pred$p1
+  first_preds$pd[lower_bound:upper_bound] = pred$pd
+  first_preds$p2[lower_bound:upper_bound] = pred$p2
+  
+  # goal
+  pred = predict_expg(replaced_model, return_df = T,
+                      team1 = current_season$HomeTeam[lower_bound:upper_bound], 
+                      team2 = current_season$AwayTeam[lower_bound:upper_bound])
+  
+  first_preds$hdaou_expg1[lower_bound:upper_bound] = pred$expg1
+  first_preds$hdaou_expg2[lower_bound:upper_bound] = pred$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day) 
+  
+}
+```
+
+## The rest
+
+```{r}
+pred = current_season
+
+pred$p1 = rep(NA, 380)
+pred$pd = rep(NA, 380)
+pred$p2 = rep(NA, 380)
+
+pred$hdaou_expg1 = rep(NA, 380)
+pred$hdaou_expg2 = rep(NA, 380)
+
+played_matches = 50
+
+## HDA and OU
+new_train_set = current_season[1:played_matches, ]
+
+for (i in 1:33){
+  
+  model_xg = goalmodel(goals1 = round(new_train_set$hdaou_xhg), goals2 = round(new_train_set$hdaou_xag),
+                       team1 = new_train_set$HomeTeam, team2 = new_train_set$AwayTeam, 
+                       model = 'poisson')
+  
+  lower_bound = played_matches + 1 + (i-1)*10
+  upper_bound = played_matches + i*10
+    
+  new_match_day = current_season[lower_bound:upper_bound, ]
+  
+  # probability
+  pred_xg = predict_result(model_xg, return_df = T,
+                          team1 = new_match_day$HomeTeam, 
+                          team2 = new_match_day$AwayTeam)
+  
+  pred$p1[lower_bound:upper_bound] = pred_xg$p1
+  pred$pd[lower_bound:upper_bound] = pred_xg$pd
+  pred$p2[lower_bound:upper_bound] = pred_xg$p2
+  
+  # goal
+  pred_xg = predict_expg(model_xg, return_df = T,
+                         team1 = new_match_day$HomeTeam, 
+                         team2 = new_match_day$AwayTeam)
+  
+  pred$hdaou_expg1[lower_bound:upper_bound] = pred_xg$expg1
+  pred$hdaou_expg2[lower_bound:upper_bound] = pred_xg$expg2
+  
+  new_train_set = rbind(new_train_set, new_match_day)
+  
+}
+```
+
+```{r}
+pred$p1[1:50] = first_preds$p1
+pred$pd[1:50] = first_preds$pd
+pred$p2[1:50] = first_preds$p2
+
+pred$hdaou_expg1[1:50] = first_preds$hdaou_expg1
+pred$hdaou_expg2[1:50] = first_preds$hdaou_expg2
+```
+
+## Evaluation
+
+### probabilistic
+
+```{r}
+# whole
+hdaou_prediction_scores = score_predictions(predictions = pred[, c('p1','pd','p2')],
+                                            observed = pred$result,
+                                            score = c('log', 'brier', 'rps'))
+sum(hdaou_prediction_scores$log)
+sum(hdaou_prediction_scores$brier)
+sum(hdaou_prediction_scores$rps)
+```
+
+```{r}
+# 51 - 380
+hda_prediction_scores = score_predictions(predictions = pred[, c('p1','pd','p2')],
+                                          observed = pred$result,
+                                          score = c('log', 'brier', 'rps'))
+sum(hda_prediction_scores$log[51:380])
+sum(hda_prediction_scores$brier[51:380])
+sum(hda_prediction_scores$rps[51:380])
+```
+
+### mae
+
+```{r}
+# whole
+mean(abs(pred$hdaou_expg1 - pred$FTHG))
+mean(abs(pred$hdaou_expg2 - pred$FTAG))
+
+mean(abs(pred$hdaou_expg1 + pred$hdaou_expg2 - pred$FTHG - pred$FTAG))
+mean(abs(pred$hdaou_expg1 - pred$hdaou_expg2 - pred$FTHG + pred$FTAG))
+```
+
+```{r}
+# 51 - 380
+mean(abs(pred$hdaou_expg1[51:380] - pred$FTHG[51:380]))
+mean(abs(pred$hdaou_expg2[51:380] - pred$FTAG[51:380]))
+
+mean(abs(pred$hdaou_expg1[51:380] + pred$hdaou_expg2[51:380] - pred$FTHG[51:380] - pred$FTAG[51:380]))
+mean(abs(pred$hdaou_expg1[51:380] - pred$hdaou_expg2[51:380] - pred$FTHG[51:380] + pred$FTAG[51:380]))
+```
+
+# Draft
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+
+
