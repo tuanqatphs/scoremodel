@@ -400,6 +400,7 @@ I only use the last season data to predict the first 50 matches in the new seaso
 
 * There are many different comparisons we can make but here I just want to compare HDA versus HDA + OU.
 * The GE error can be reduced pretty obviously if we use OU only.
+* I have only tested on Engling Premier League.
 
 https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit?usp=sharing
 
