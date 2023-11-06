@@ -379,6 +379,8 @@ row.names(fbref_data) = c(1:380)
 fbref_data = fbref_data[order(as.Date(fbref_data$Date, format = "%d/%m/%Y")), ]
 fbref_data
 ```
+I have an idea (sort of) and a question for you.
+
 1/ Using both 1X2 and OU odds to convert to expected goals
 
 Instead of only using HDA odds (1X2) to convert to expected goals, I use both 1X2 and OU (over/under) odds to calculate the expected goals. To save your time, I attached some R codes so that you can just run and see the results. Let me know how you think about it. Below is the summary of the code:
@@ -388,13 +390,16 @@ Instead of only using HDA odds (1X2) to convert to expected goals, I use both 1X
 I just wrote one more function which converts OU odds to OU probabilities then use your way to calculate it (to minimise the sum squared error), except that I deleted some codes for simplification.
 I still got an error from the score_predictions() function although I remember that you fixed it and it worked last time. I again turned the any(observed <= ncat) condition off.
 
-2b/ In the Some preparations section
+1b/ In the Some preparations section
 
 Since the model can't predict the very first matches in a season because there are 3 new teams that didn't play on the last season, my idea is just simply replace the names of the 3 dropped teams by the names of the 3 new teams so that we can predict all matches in a season.
 
-3c/ In the Modelling section
+1c/ In the Modelling section
 
-I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually we have 10 matches in a matchday. Also, apart from using log/brier/rps score as our metrics, I tried mean absolute error of the home goal, away goal as well as GE (total goals) and SUP (goal diffference) as metrics. I expected the results (below) should agree with each other but they actually don't.
+I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually we have 10 matches in a matchday (I break down the performance into 2 parts, one is from match 1 to 380 and the second one is from match 51 to 380). Also, apart from using log/brier/rps score as our metrics, I tried mean absolute error of the home goal, away goal as well as GE (total goals) and SUP (goal diffference) as metrics. Looking at the probabilistic metrics, you will see that there are more green in the HDA + OU area.
+
+* There are many different comparisons we can make but here I just want to compare HDA versus HDA + OU.
+* The GE error can be reduced pretty obviously if we use OU only.
 
 https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit?usp=sharing
 
@@ -408,7 +413,17 @@ https://opisthokonta.net/?p=927 3
 https://opisthokonta.net/?p=939 4
 https://opisthokonta.net/?p=1013 (weight)
 
-From the file goalmodel_fit.R, line 419, you place the DC weights to the weights argument. It's like weighted least squares for me, is it related?
+From the file goalmodel_fit.R, line 419, you place the DC weights to the weights argument. It's like weighted least squares for me, is it related? 
+
+3/ Since treating expected goals calculated from bookies' odds as the response variables gives me better results than others (full time goals or expected goals from opta), I tried round it to integer so that I can together use it with DC and CMP model but I got this error message for DC:
+
+"Warning: predict_goals: negative proabilities in game 'x' " (x is from 1 to 10)
+And this error for CMP:
+"Error in stats::optim(par = parameter_vector, fn = negloglik, goals1 = goals1, :non-finite finite-difference value [41]"
+
+Do you know why?
+
+Thank you.
 
 4/ Why to compute the log-link functions?
 5/ Why doesn't rounding work?
