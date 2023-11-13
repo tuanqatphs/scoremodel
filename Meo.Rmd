@@ -430,5 +430,15 @@ Thank you.
 5/ Why doesn't rounding work?
 
 
+I tried using two-step estimation with parameters estimated from the gaussian model and here are the results (sheet 2):
+https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit#gid=672356215
+You have any idea why I got the exact parameters? It makes me feel like the DC didn't do anything but to copy the parameters from the Gaussian model.
 
+As for the "negative probabilites in game x" warning, I'm still trying to figure it out.
 
+About the error from score_prediction(), I realised that I was using the older version. I'll need to reinstall it.
+
+By the way, do you know any good sources (blogs/books/etc) on betting? Once I have the model, I'd like to test out how much I would win or lose?
+
+Thank you.
+By the way,
