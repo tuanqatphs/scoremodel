@@ -381,64 +381,20 @@ fbref_data
 ```
 I have an idea (sort of) and a question for you.
 
-1/ Using both 1X2 and OU odds to convert to expected goals
+1/ The paper doesn't come with the code so I find it difficult to reproduce the results. I just tried the model in page 14 with 4 covariates only (the number of shots and the number of corners from previous matches) and the outcomes are not really good.
 
-Instead of only using HDA odds (1X2) to convert to expected goals, I use both 1X2 and OU (over/under) odds to calculate the expected goals. To save your time, I attached some R codes so that you can just run and see the results. Let me know how you think about it. Below is the summary of the code:
+2/ We can use your package to fit and make predictions because it's pretty similar to the number of goals.
 
-1a/ In the Some Functions section
+3/ Just my very first thoughts on the corner kicks
 
-I just wrote one more function which converts OU odds to OU probabilities then use your way to calculate it (to minimise the sum squared error), except that I deleted some codes for simplification.
-I still got an error from the score_predictions() function although I remember that you fixed it and it worked last time. I again turned the any(observed <= ncat) condition off.
+I used data from the five big leagues (England, Spain, Italy, Germany, France) with 5 latest seasons.
 
-1b/ In the Some preparations section
+There is kind of a problem with the corner kicks. Since the variance is much greater than the mean, I assume it follows the Negative Binomial distribution. Then I get the parameters, draw samples, make plots and compare to the actual data. As you can see in the images, the NegBin distribution fits the corner kicks of the home team and away team quite well. It's also okay when we calculate the difference of corner kicks. And the issue comes when we sum them up.
 
-Since the model can't predict the very first matches in a season because there are 3 new teams that didn't play on the last season, my idea is just simply replace the names of the 3 dropped teams by the names of the 3 new teams so that we can predict all matches in a season.
+You can image I would lose money if I place my bets on corner over/under.
 
-1c/ In the Modelling section
+I think it's because these two variables are dependent. The correlation coefficients for the home goals and away goals is -0.094 whereas it's 0.262 for the corner kicks of two teams. 
 
-I only use the last season data to predict the first 50 matches in the new season, then stop using the last season data from match 51st onwards. You will see I make 10 predictions at once since usually we have 10 matches in a matchday (I break down the performance into 2 parts, one is from match 1 to 380 and the second one is from match 51 to 380). Also, apart from using log/brier/rps score as our metrics, I tried mean absolute error of the home goal, away goal as well as GE (total goals) and SUP (goal diffference) as metrics. Looking at the probabilistic metrics, you will see that there are more green in the HDA + OU area.
-
-* There are many different comparisons we can make but here I just want to compare HDA versus HDA + OU.
-* The GE error can be reduced pretty obviously if we use OU only.
-* I have only tested on Engling Premier League.
-
-https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit?usp=sharing
-
-2/ How does the weights computed from the weight_dc() function actually work in Gaussian model?
-
-I read your articles about it here but I haven't understood to be honest. Could you explain to me in another simpler way or suggest me other sources that I should read or watch?
-
-https://opisthokonta.net/?p=890 1
-https://opisthokonta.net/?p=913 2
-https://opisthokonta.net/?p=927 3
-https://opisthokonta.net/?p=939 4
-https://opisthokonta.net/?p=1013 (weight)
-
-From the file goalmodel_fit.R, line 419, you place the DC weights to the weights argument. It's like weighted least squares for me, is it related? 
-
-3/ Since treating expected goals calculated from bookies' odds as the response variables gives me better results than others (full time goals or expected goals from opta), I tried round it to integer so that I can together use it with DC and CMP model but I got this error message for DC:
-
-"Warning: predict_goals: negative proabilities in game 'x' " (x is from 1 to 10)
-And this error for CMP:
-"Error in stats::optim(par = parameter_vector, fn = negloglik, goals1 = goals1, :non-finite finite-difference value [41]"
-
-Do you know why?
-
-Thank you.
-
-4/ Why to compute the log-link functions?
-5/ Why doesn't rounding work?
+Do you have any idea to counter this?
 
 
-I tried using two-step estimation with parameters estimated from the gaussian model and here are the results (sheet 2):
-https://docs.google.com/spreadsheets/d/1i9v0kZOHZYSPJ0iKAJm-kI8J0WaFblLYKmvTVJeKkus/edit#gid=672356215
-You have any idea why I got the exact parameters? It makes me feel like the DC didn't do anything but to copy the parameters from the Gaussian model.
-
-As for the "negative probabilites in game x" warning, I'm still trying to figure it out.
-
-About the error from score_prediction(), I realised that I was using the older version. I'll need to reinstall it.
-
-By the way, do you know any good sources (blogs/books/etc) on betting? Once I have the model, I'd like to test out how much I would win or lose?
-
-Thank you.
-By the way,
