@@ -381,20 +381,19 @@ fbref_data
 ```
 I have an idea (sort of) and a question for you.
 
-1/ The paper doesn't come with the code so I find it difficult to reproduce the results. I just tried the model in page 14 with 4 covariates only (the number of shots and the number of corners from previous matches) and the outcomes are not really good.
+I'm not sure if the goalmodel is truely better than the ones in the paper because I've only tried one of the ideas.
 
-2/ We can use your package to fit and make predictions because it's pretty similar to the number of goals.
+This is my way: I got the parameters r and p from this formula: https://en.wikipedia.org/wiki/Negative_binomial_distribution#Alternative_parameterizations then generate samples using rnbinom(n, size, prob, mu) where size and prob are r and p respectively. And in my case with the five-bif_league data set, home and away corner kicks have the same parameter p (prob) but different mu (mean) and p (size or dispersion). I'm not sure if I need to pay attention to this? I read that if two independent NB variables X∼NB(r,p) and Y∼NB(s,p) then X+Y∼NB(r+s,p), right? 
 
-3/ Just my very first thoughts on the corner kicks
+I don't understand the correlation on residuals. Do you mean we need a model, make predictions, get residuals then calculate the correlation? Why should I do it on the residuals instead of the data itself?
 
-I used data from the five big leagues (England, Spain, Italy, Germany, France) with 5 latest seasons.
+I noticed you have a folder for Bivariate Poisson but apparently you haven't finished. I've heard of that but I have never actually worked with it and I think I should.
 
-There is kind of a problem with the corner kicks. Since the variance is much greater than the mean, I assume it follows the Negative Binomial distribution. Then I get the parameters, draw samples, make plots and compare to the actual data. As you can see in the images, the NegBin distribution fits the corner kicks of the home team and away team quite well. It's also okay when we calculate the difference of corner kicks. And the issue comes when we sum them up.
+Thank you for another paper. I had a quick look at it and I think it's to be honest. But I'll still try if I can derive something from it.
 
-You can image I would lose money if I place my bets on corner over/under.
+Thank you and Merry Christmas.
 
-I think it's because these two variables are dependent. The correlation coefficients for the home goals and away goals is -0.094 whereas it's 0.262 for the corner kicks of two teams. 
 
-Do you have any idea to counter this?
+
 
 
