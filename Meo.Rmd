@@ -381,13 +381,13 @@ fbref_data
 ```
 I have an idea (sort of) and a question for you.
 
-I'm not sure if the goalmodel is truely better than the ones in the paper because I've only tried one of the ideas.
+Actually I'm not sure if the goalmodel is truely better than the ones in the paper because I've only tried one of the ideas.
 
-This is my way: I got the parameters r and p from this formula: https://en.wikipedia.org/wiki/Negative_binomial_distribution#Alternative_parameterizations then generate samples using rnbinom(n, size, prob, mu) where size and prob are r and p respectively. And in my case with the five-bif_league data set, home and away corner kicks have the same parameter p (prob) but different mu (mean) and p (size or dispersion). I'm not sure if I need to pay attention to this? I read that if two independent NB variables X∼NB(r,p) and Y∼NB(s,p) then X+Y∼NB(r+s,p), right? 
+About the parameters, this is my way: I got the parameters r and p from this formula: https://en.wikipedia.org/wiki/Negative_binomial_distribution#Alternative_parameterizations then generate samples using rnbinom(n, size, prob, mu) where size and prob are r and p respectively. And in my case with the five-big_league data set, home and away corner kicks have the same parameter p (prob) but different mu (mean) and r (size or dispersion). I'm not sure if I need to pay attention to this? I read that if two independent NB variables X∼NB(r,p) and Y∼NB(s,p) then X+Y∼NB(r+s,p), right? I attached an image of the paramaters, I think I got it correctly.
 
 I don't understand the correlation on residuals. Do you mean we need a model, make predictions, get residuals then calculate the correlation? Why should I do it on the residuals instead of the data itself?
 
-I noticed you have a folder for Bivariate Poisson but apparently you haven't finished. I've heard of that but I have never actually worked with it and I think I should.
+I noticed you have a folder for Bivariate Poisson but apparently you haven't finished. I've heard of the BivPois but I have never actually worked with it which I think I should.
 
 Thank you for another paper. I had a quick look at it and I think it's to be honest. But I'll still try if I can derive something from it.
 
